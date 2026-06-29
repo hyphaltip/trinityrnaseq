@@ -27,6 +27,9 @@ no_bamsifter: inchworm_target chrysalis_target
 install:
 	util/support_scripts/trinity_installer.py
 
+rust_bio_target:
+		cd rust_bio_utils && cargo build --release
+
 inchworm_target:
 	@echo Using $(TRINITY_COMPILER) compiler for Inchworm and Chrysalis
 	cd Inchworm && $(MAKE)
