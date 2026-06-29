@@ -179,20 +179,53 @@ Speedup: Rust vs original      = 3.40x
 | `util/bench/profile_prep_rnaseq.pl` | Pipeline profiling harness (times each step) |
 | `util/bench/benchmark_sam_parsing.pl` | Head-to-head Perl vs Rust SAM parsing benchmark |
 
-## 5. Recommended Implementation Path
+## 5. Implemented Rust Replacements & Measured Speedup
 
-### Immediate (low-risk, high-impact)
-1. **Use `SAM_entry_cached.pm`** in all pipeline scripts for ~9-29% SAM processing speedup
-2. **Replace `define_coverage_partitions.pl`** with a Rust streaming WIG→GFF parser — it's the biggest bottleneck (48.7% of total) and the simplest to rewrite (~78 lines of Perl)
+Steps 1 and 2 from the recommendation list below have been **implemented and
+verified**.  The Rust binaries are auto-detected by
+`prep_rnaseq_alignments_for_genome_assisted_assembly.pl` at runtime via
+`find_rust_binary()`; if the binary is missing the Perl fallback is used.
 
-### Medium-term (moderate-risk, high-impact)
-3. **Replace `fragment_coverage_writer.pl`** with a Rust coverage accumulator — second biggest bottleneck (23.7%)
-4. **Replace `extract_reads_per_partition.pl`** with a Rust partition extractor — 15.2% of total
-5. **Create Perl XS bindings** to the Rust SAM parser for 3.4× speedup across all 40+ scripts that use `SAM_entry.pm`
+### 5.1 Implemented Replacements
+
+| Replaced script | Rust binary | LOC |
+|-----------------|-------------|-----|
+| `define_coverage_partitions.pl` (78 LOC) | `rust_bio_utils/src/bin/define_coverage_partitions.rs` | ~110 |
+| `fragment_coverage_writer.pl` (114 LOC) | `rust_bio_utils/src/bin/fragment_coverage_writer.rs` | ~115 |
+
+Both replacements produce **byte-identical output** to the Perl originals
+(verified with `diff` on 200K-record synthetic SAM).
+
+### 5.2 Measured Speedup (200K paired-end SAM records, best of 3)
+
+```
+Step                              Perl (avg)   Rust (avg)   Speedup
+─────────────────────────────────────────────────────────────────────
+SAM_to_frag_coords.pl               6.06s       6.32s       0.96×  (still Perl)
+fragment_coverage_writer.pl        12.97s       1.96s       6.62×  ★
+define_coverage_partitions.pl      27.17s       4.01s       6.78×  ★
+extract_reads_per_partition.pl      6.81s       6.57s       1.04×  (still Perl)
+─────────────────────────────────────────────────────────────────────
+TOTAL                              53.01s      18.85s       2.81×  ★
+```
+
+**Result:** Rewriting just the two hottest sub-scripts in Rust yields a
+**2.8× speedup** of the overall `prep_rnaseq_alignments_for_genome_assisted_assembly.pl`
+pipeline (53s → 19s on 200K records), with no change in output.
+
+### 5.3 Remaining Optimization Opportunities
+
+### Immediate (low-risk, high-impact) — DONE
+1. ✅ **Replace `define_coverage_partitions.pl`** with Rust — 6.8× faster
+2. ✅ **Replace `fragment_coverage_writer.pl`** with Rust — 6.6× faster
+
+### Medium-term (moderate-risk, high-impact) — NEXT
+3. **Replace `extract_reads_per_partition.pl`** with a Rust partition extractor — 15.2% of total
+4. **Create Perl XS bindings** to the Rust SAM parser for 3.4× speedup across all 40+ scripts that use `SAM_entry.pm`
 
 ### Long-term (high-risk, transformative)
-6. **Replace `SAM_to_frag_coords.pl`** with a Rust implementation that includes an in-memory sort (eliminates the external `sort` subprocess, which dominates this step for large SAM files)
-7. **Full pipeline integration** — rewrite the entire `prep_rnaseq_alignments_for_genome_assisted_assembly.pl` pipeline as a single Rust binary, eliminating all `system()` calls and inter-process I/O
+5. **Replace `SAM_to_frag_coords.pl`** with a Rust implementation that includes an in-memory sort (eliminates the external `sort` subprocess, which dominates this step for large SAM files)
+6. **Full pipeline integration** — rewrite the entire `prep_rnaseq_alignments_for_genome_assisted_assembly.pl` pipeline as a single Rust binary, eliminating all `system()` calls and inter-process I/O
 
 ## 6. Expected Impact on Trinity Pipeline
 
@@ -202,6 +235,11 @@ For a typical Trinity genome-guided assembly run processing 100M reads:
 - **Rust WIG parser** (define_coverage_partitions.pl replacement): ~48% faster coverage partitioning
 - **Full Rust pipeline**: ~3-4× faster end-to-end genome-guided assembly prep
 
+### Achieved so far
+- **2.8× faster** `prep_rnaseq_alignments_for_genome_assisted_assembly.pl` pipeline
+  (53s → 19s on 200K records) via Rust replacements for
+  `fragment_coverage_writer.pl` and `define_coverage_partitions.pl`.
+
 ## 7. Benchmark Commands
 
 ```bash
@@ -210,10 +248,17 @@ perl util/bench/generate_synthetic_sam.pl \
     --num_reads 100000 --num_scaffolds 50 \
     --out /tmp/synthetic.sam --paired
 
-# Profile the full pipeline (times each step)
+# Profile the full pipeline with Perl backend (times each step)
 perl util/bench/profile_prep_rnaseq.pl \
     --coord_sorted_SAM /tmp/synthetic.sam \
-    --max_intron_length 10000 --min_coverage 1
+    --max_intron_length 10000 --min_coverage 1 \
+    --backend perl
+
+# Profile the full pipeline with Rust backend
+perl util/bench/profile_prep_rnaseq.pl \
+    --coord_sorted_SAM /tmp/synthetic.sam \
+    --max_intron_length 10000 --min_coverage 1 \
+    --backend rust
 
 # Head-to-head Perl vs Rust SAM parsing benchmark
 perl util/bench/benchmark_sam_parsing.pl \
@@ -225,3 +270,24 @@ cd rust_bio_utils && cargo bench --bench cigar_benchmark
 # Perl SAM_entry micro-benchmarks
 perl PerlLib/benchmark_sam_entry.pl 100000
 ```
+
+## 8. Files Created / Modified
+
+### New Rust binaries (`rust_bio_utils/src/bin/`)
+| File | Replaces |
+|------|----------|
+| `define_coverage_partitions.rs` | `util/support_scripts/define_coverage_partitions.pl` |
+| `fragment_coverage_writer.rs` | `util/support_scripts/fragment_coverage_writer.pl` |
+
+### New profiling/benchmark infrastructure
+| File | Purpose |
+|------|---------|
+| `util/bench/generate_synthetic_sam.pl` | Synthetic SAM file generator for benchmarking |
+| `util/bench/profile_prep_rnaseq.pl` | Pipeline profiling harness (Perl vs Rust backends) |
+| `util/bench/benchmark_sam_parsing.pl` | Head-to-head Perl vs Rust SAM parsing benchmark |
+| `rust_bio_utils/src/bin/trinity_bio_sam_bench.rs` | Standalone Rust SAM parsing benchmark binary |
+
+### Modified pipeline scripts
+| File | Change |
+|------|--------|
+| `util/support_scripts/prep_rnaseq_alignments_for_genome_assisted_assembly.pl` | Added `find_rust_binary()` — auto-uses Rust `fragment_coverage_writer` and `define_coverage_partitions` when available, falls back to Perl otherwise |

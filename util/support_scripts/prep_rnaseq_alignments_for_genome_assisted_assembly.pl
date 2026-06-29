@@ -163,6 +163,14 @@ main: {
 }
 
 
+sub find_rust_binary {
+    my ($name) = @_;
+    my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
+    my $path = "$rust_dir/$name";
+    return (-x $path) ? $path : undef;
+}
+
+
 sub prep_read_partitions {
     my ($sam, $strand) = @_;
 
@@ -171,7 +179,8 @@ sub prep_read_partitions {
     &process_cmd($cmd) unless (-s "$sam.frag_coords");
     
     ## define coverage
-    $cmd = "$UTIL_DIR/fragment_coverage_writer.pl $sam.frag_coords > $sam.frag_coverage.wig";
+    my $frag_writer = &find_rust_binary("fragment_coverage_writer") || "$UTIL_DIR/fragment_coverage_writer.pl";
+    $cmd = "$frag_writer $sam.frag_coords > $sam.frag_coverage.wig";
 
     unless (-s "$sam.frag_coverage.wig.ok") {
         &process_cmd($cmd);
@@ -181,7 +190,8 @@ sub prep_read_partitions {
     my $partitions_file = "$sam.minC$min_coverage.gff";
 
     ## define partitions
-    $cmd = "$UTIL_DIR/define_coverage_partitions.pl $sam.frag_coverage.wig $min_coverage $strand > $partitions_file";
+    my $define_parts = &find_rust_binary("define_coverage_partitions") || "$UTIL_DIR/define_coverage_partitions.pl";
+    $cmd = "$define_parts $sam.frag_coverage.wig $min_coverage $strand > $partitions_file";
     unless (-s "$partitions_file.ok") {
         &process_cmd($cmd);
         &process_cmd("touch $partitions_file.ok");

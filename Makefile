@@ -17,7 +17,7 @@ else
 endif
 
 
-all: inchworm_target chrysalis_target trinity_essentials
+all: inchworm_target chrysalis_target trinity_essentials rust_bio_target
 	sh ./util/support_scripts/trinity_install_tests.sh
 
 
