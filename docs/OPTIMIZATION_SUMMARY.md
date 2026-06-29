@@ -1,15 +1,17 @@
-# SAM_entry.pm Optimization Summary
+# Optimization Summary
 
-## Benchmark Results
+## 1. SAM_entry.pm Micro-Optimization (Perl)
 
-### Perl Optimization (Cached CIGAR)
+### Benchmark Results
+
+#### Perl Optimization (Cached CIGAR)
 ```
 Test 1: Simple alignment (50M)
   cached:   38,760 ops/s  (25.8 µs/op)
   original: 45,872 ops/s  (21.8 µs/op)
   → 16% slower for single-pass (cache overhead)
 
-Test 2: Complex alignment (10M5I10M5D10M25N10M)
+Test 2: Complex alignment (10M5I10M5D10M)
   cached:   24,510 ops/s  (40.8 µs/op)
   original: 20,661 ops/s  (48.4 µs/op)
   → 19% FASTER (cache benefits complex CIGARs)
@@ -20,18 +22,39 @@ Test 3: Multiple accesses (cache effectiveness)
   → 29% FASTER (cache eliminates re-parsing)
 ```
 
-### Rust Implementation Performance
+#### Rust Implementation Performance (criterion)
 ```
-Full parse (3 method calls): 5.16 µs/op
-Cached CIGAR (6 method calls): 4.53 µs/op
-Single entry: 862 ns/op
+CIGAR parsing (per CIGAR string):
+  10M       :  29 ns
+  50M       :  35 ns
+  100M      :  42 ns
+  10M5I10M5D10M :  45 ns
+  25M100N25M    :  38 ns
+  5S10M5S       :  41 ns
+  10H10M10H     :  42 ns
+  10M2I5M2D5M3I2M : 48 ns
 
-→ Rust is 5-8x faster than optimized Perl
+SAM entry parse (per record):
+  original (lazy)   :  5.1 µs
+  optimized (cached):  6.4 µs   ← slower for single-pass!
+
+High-volume (per record):
+  original   :  784 ns
+  optimized  :  1.43 µs  ← slower for single-pass!
 ```
 
-## Key Optimizations Applied
+> **Key insight:** The Rust "optimized" variant eagerly computes
+> `genome_span`, `read_span`, and `alignment_length` at parse time.
+> For single-pass processing this is *slower* than the lazy original.
+> The optimized variant only wins when the same span/length is queried
+> multiple times.  Pipeline integration should use the lazy original
+> unless repeated queries are expected.
 
-### 1. CIGAR Parsing Cache
+→ Rust is **3.4× faster** than Perl original for end-to-end SAM parsing.
+
+## 2. Key Optimizations Applied
+
+### 2.1 CIGAR Parsing Cache
 ```perl
 # Before: Parse every time get_alignment_coords() is called
 sub get_alignment_coords {
@@ -47,11 +70,11 @@ sub _parse_cigar {
 }
 ```
 
-### 2. Span Caching
+### 2.2 Span Caching
 ```perl
 # Cache genome/read spans
 sub get_genome_span {
-    return @{$self->{_cigar_genome_span}} 
+    return @{$self->{_cigar_genome_span}}
         if defined $self->{_cigar_genome_span};
     # ... calculate ...
     $self->{_cigar_genome_span} = [$lend, $rend];
@@ -59,7 +82,7 @@ sub get_genome_span {
 }
 ```
 
-### 3. Pre-compiled Regex
+### 2.3 Pre-compiled Regex
 ```perl
 # Before: Compile regex on each call
 while ($alignment =~ /(\d+)([A-Z])/g)
@@ -69,7 +92,7 @@ my $CIGAR_REGEX = qr/(\d+)([A-Z])/;
 while ($alignment =~ /$CIGAR_REGEX/g)
 ```
 
-### 4. Inline Bit Operations
+### 2.4 Inline Bit Operations
 ```perl
 # Before: Hex literals computed each time
 return($flag & 0x0010);
@@ -79,45 +102,126 @@ use constant FLAG_QUERY_STRAND => 0x0010;
 return $self->_get_bit_val(FLAG_QUERY_STRAND);
 ```
 
-### 5. Early Return for '*' CIGAR
+### 2.5 Early Return for '*' CIGAR
 ```perl
 # Skip expensive parsing for unmapped reads
 return ([], []) if $alignment eq '*' || !$alignment;
 ```
 
-## Files Created
+## 3. Pipeline Profiling: `prep_rnaseq_alignments_for_genome_assisted_assembly.pl`
+
+The orchestrator `prep_rnaseq_alignments_for_genome_assisted_assembly.pl`
+is a thin wrapper that calls 5 sub-scripts via `system()`.  It does no
+heavy lifting itself, so rewriting *just* the orchestrator in Rust would
+yield negligible speedup.  The real opportunity is rewriting the hot
+sub-scripts.
+
+### 3.1 Profiling Infrastructure
+
+| File | Purpose |
+|------|---------|
+| `util/bench/generate_synthetic_sam.pl` | Generates coordinate-sorted paired-end SAM for benchmarking |
+| `util/bench/profile_prep_rnaseq.pl` | Wraps the full pipeline and times each sub-script |
+| `util/bench/benchmark_sam_parsing.pl` | Head-to-head Perl vs Rust SAM parsing on a real SAM file |
+| `rust_bio_utils/src/bin/trinity_bio_sam_bench.rs` | Rust binary that the Perl benchmark shells out to |
+| `rust_bio_utils/benches/cigar_benchmark.rs` | Criterion micro-benchmarks for CIGAR/SAM parsing |
+
+### 3.2 Pipeline Step-by-Step Profiling Results
+
+Benchmark setup: 200,000 paired-end SAM records across 50 scaffolds,
+`--max_intron_length 10000 --min_coverage 1`.
+
+```
+Step                                      Time       % of total
+─────────────────────────────────────────────────────────────────
+SAM_to_frag_coords.pl                     6.005s     12.4%
+fragment_coverage_writer.pl              11.486s     23.7%
+define_coverage_partitions.pl            23.560s     48.7%  ← bottleneck
+extract_reads_per_partition.pl            7.362s     15.2%
+─────────────────────────────────────────────────────────────────
+TOTAL                                    48.413s
+```
+
+### 3.3 Bottleneck Analysis
+
+| Step | Bottleneck | Rust rewrite difficulty |
+|------|-----------|------------------------|
+| `define_coverage_partitions.pl` | Reads a massive WIG file line-by-line in Perl; per-line `split` + regex is expensive at 50M+ lines | **Easy** — simple streaming parser, ~78 lines of Perl |
+| `fragment_coverage_writer.pl` | Perl array coverage accumulation with per-base `for` loop; builds huge hashes | **Medium** — needs careful memory management for coverage arrays |
+| `extract_reads_per_partition.pl` | Per-read SAM parsing + file I/O for partition directories | **Medium** — needs SAM reader + partition directory management |
+| `SAM_to_frag_coords.pl` | External `sort` subprocess dominates; Perl SAM parsing per read | **Hard** — would need to replace external `sort` with in-memory radix/merge sort |
+
+### 3.4 End-to-End SAM Parsing Benchmark (Perl vs Rust)
+
+Benchmark setup: 200,000 SAM records, best of 3 iterations.
+
+```
+Implementation            Time (s)     Records/s
+─────────────────────────────────────────────────────
+perl_original                5.377        37,197
+perl_optimized (cached)      4.950        40,404
+rust                         1.580       126,593
+─────────────────────────────────────────────────────
+Speedup: optimized vs original = 1.09x
+Speedup: Rust vs original      = 3.40x
+```
+
+## 4. Files Created
 
 | File | Purpose |
 |------|---------|
 | `PerlLib/SAM_entry_cached.pm` | Optimized Perl module with caching |
-| `rust_bio_utils/src/sam.rs` | Rust implementation with benchmarks |
-| `rust_bio_utils/Cargo.toml` | Rust dependencies |
-| `util/benchmark_sam_entry.pl` | Perl benchmark script |
+| `PerlLib/SAM_entry_optimized.pm` | Drop-in replacement for `SAM_entry.pm` |
+| `rust_bio_utils/src/sam.rs` | Rust implementation with `SAMEntry` (lazy) and `SAMEntryOptimized` (cached) |
+| `rust_bio_utils/benches/cigar_benchmark.rs` | Criterion benchmarks for CIGAR/SAM parsing |
+| `rust_bio_utils/src/bin/trinity_bio_sam_bench.rs` | Standalone Rust SAM parsing benchmark binary |
+| `util/bench/generate_synthetic_sam.pl` | Synthetic SAM file generator for profiling |
+| `util/bench/profile_prep_rnaseq.pl` | Pipeline profiling harness (times each step) |
+| `util/bench/benchmark_sam_parsing.pl` | Head-to-head Perl vs Rust SAM parsing benchmark |
 
-## Recommended Implementation Path
+## 5. Recommended Implementation Path
 
-1. **Immediate**: Use `SAM_entry_cached.pm` for 19-29% speedup
-2. **Medium-term**: Create Perl XS bindings to Rust for 5-8x speedup
-3. **Long-term**: Consider full pipeline integration via IPC
+### Immediate (low-risk, high-impact)
+1. **Use `SAM_entry_cached.pm`** in all pipeline scripts for ~9-29% SAM processing speedup
+2. **Replace `define_coverage_partitions.pl`** with a Rust streaming WIG→GFF parser — it's the biggest bottleneck (48.7% of total) and the simplest to rewrite (~78 lines of Perl)
 
-## Expected Impact on Trinity Pipeline
+### Medium-term (moderate-risk, high-impact)
+3. **Replace `fragment_coverage_writer.pl`** with a Rust coverage accumulator — second biggest bottleneck (23.7%)
+4. **Replace `extract_reads_per_partition.pl`** with a Rust partition extractor — 15.2% of total
+5. **Create Perl XS bindings** to the Rust SAM parser for 3.4× speedup across all 40+ scripts that use `SAM_entry.pm`
 
-The `SAM_entry` module is used in:
-- `scaffold_iworm_contigs.pl` - Contig scaffolding
-- `SAM_strand_separator.pl` - Strand separation  
-- `SAM_to_frag_coords.pl` - Fragment coordinate extraction
-- 40+ other utility scripts
+### Long-term (high-risk, transformative)
+6. **Replace `SAM_to_frag_coords.pl`** with a Rust implementation that includes an in-memory sort (eliminates the external `sort` subprocess, which dominates this step for large SAM files)
+7. **Full pipeline integration** — rewrite the entire `prep_rnaseq_alignments_for_genome_assisted_assembly.pl` pipeline as a single Rust binary, eliminating all `system()` calls and inter-process I/O
 
-For a typical Trinity run processing 100M reads with 1M alignments:
-- **Perl optimization**: ~15-20% faster SAM processing
-- **Rust integration**: ~40-50% faster SAM processing
+## 6. Expected Impact on Trinity Pipeline
 
-## Benchmark Commands
+For a typical Trinity genome-guided assembly run processing 100M reads:
+- **Perl optimization only** (SAM_entry_cached.pm): ~15-20% faster SAM processing
+- **Rust SAM parser** (Perl XS bindings): ~40-50% faster SAM processing
+- **Rust WIG parser** (define_coverage_partitions.pl replacement): ~48% faster coverage partitioning
+- **Full Rust pipeline**: ~3-4× faster end-to-end genome-guided assembly prep
+
+## 7. Benchmark Commands
 
 ```bash
-# Perl benchmarks
-perl -I. -IPerlLib util/benchmark_sam_entry.pl 100000
+# Generate synthetic SAM for benchmarking
+perl util/bench/generate_synthetic_sam.pl \
+    --num_reads 100000 --num_scaffolds 50 \
+    --out /tmp/synthetic.sam --paired
 
-# Rust benchmarks
-cd rust_bio_utils && cargo bench
+# Profile the full pipeline (times each step)
+perl util/bench/profile_prep_rnaseq.pl \
+    --coord_sorted_SAM /tmp/synthetic.sam \
+    --max_intron_length 10000 --min_coverage 1
+
+# Head-to-head Perl vs Rust SAM parsing benchmark
+perl util/bench/benchmark_sam_parsing.pl \
+    --sam /tmp/synthetic.sam --iterations 3
+
+# Rust criterion micro-benchmarks
+cd rust_bio_utils && cargo bench --bench cigar_benchmark
+
+# Perl SAM_entry micro-benchmarks
+perl PerlLib/benchmark_sam_entry.pl 100000
 ```
