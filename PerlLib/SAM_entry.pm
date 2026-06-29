@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp;
 
-
+my $CIGAR_REGEX = qr/(\d+)([A-Z])/;
 
 sub new {
 	my $packagename = shift;
@@ -18,12 +18,15 @@ sub new {
 
 	my @fields = split(/\t/, $line);
 	
-	my $self = {
+	my $self = bless {
         _line => $line,
 		_fields => [@fields],
-	};
-	
-	bless ($self, $packagename);
+		_cigar_parsed => undef,
+		_cigar_genome_span => undef,
+		_cigar_read_span => undef,
+		_cigar_alignment_length => undef,
+		_flag_cached => undef,
+	}, $packagename;
 	
 	return($self);
 }
@@ -133,6 +136,11 @@ sub get_cigar_alignment {
 ###
 sub get_genome_span {
     my $self = shift;
+
+    if (defined $self->{_cigar_genome_span}) {
+        return @{$self->{_cigar_genome_span}};
+    }
+
     my ($genome_aref, $read_aref) = $self->get_alignment_coords();
 
     my @coords;
@@ -145,12 +153,17 @@ sub get_genome_span {
     my $min_coord = shift @coords;
     my $max_coord = pop @coords;
 
+    $self->{_cigar_genome_span} = [$min_coord, $max_coord];
     return($min_coord, $max_coord);
 }
 
 ####
 sub get_read_span {
     my $self = shift;
+
+    if (defined $self->{_cigar_read_span}) {
+        return @{$self->{_cigar_read_span}};
+    }
 
     my ($genome_aref, $read_aref) = $self->get_alignment_coords();
 
@@ -164,6 +177,7 @@ sub get_read_span {
     my $min_coord = shift @coords;
     my $max_coord = pop @coords;
 
+    $self->{_cigar_read_span} = [$min_coord, $max_coord];
     return($min_coord, $max_coord);
 
 }
@@ -171,7 +185,11 @@ sub get_read_span {
 ####
 sub get_alignment_length {
     my $self = shift;
-   
+
+    if (defined $self->{_cigar_alignment_length}) {
+        return $self->{_cigar_alignment_length};
+    }
+
     my ($genome_coords_aref, $read_coords_aref) = $self->get_alignment_coords();
 
     my $sum_len = 0;
@@ -183,7 +201,34 @@ sub get_alignment_length {
         $sum_len += abs($genome_rend - $genome_lend) + 1;
     }
 
+    $self->{_cigar_alignment_length} = $sum_len;
     return($sum_len);
+}
+
+
+####
+sub _parse_cigar {
+	my $self = shift;
+
+	if (defined $self->{_cigar_parsed}) {
+		return $self->{_cigar_parsed};
+	}
+
+	my $alignment = $self->get_cigar_alignment();
+
+	my @ops;
+	if (defined $alignment && $alignment ne '*') {
+		while ($alignment =~ /$CIGAR_REGEX/g) {
+			my ($len, $code) = ($1, $2);
+			unless ($code =~ /^[MSDNIH]$/) {
+				confess "Error, cannot parse cigar code [$code] " . $self->toString();
+			}
+			push @ops, { len => $len, code => $code };
+		}
+	}
+
+	$self->{_cigar_parsed} = \@ops;
+	return \@ops;
 }
 
 
@@ -205,15 +250,11 @@ sub get_alignment_coords {
 
 	$genome_lend--; # move pointer just before first position.
 	
-	while ($alignment =~ /(\d+)([A-Z])/g) {
-		my $len = $1;
-		my $code = $2;
-		
-		unless ($code =~ /^[MSDNIH]$/) {
-			confess "Error, cannot parse cigar code [$code] " . $self->toString();
-		}
-		
-		# print "parsed $len,$code\n";
+	my @ops = @{$self->_parse_cigar()};
+	
+	for my $op (@ops) {
+		my $len = $op->{len};
+		my $code = $op->{code};
 		
 		if ($code eq 'M') { # aligned bases match or mismatch
 			
@@ -400,6 +441,7 @@ sub set_flag {
 	}
 
 	$self->{_fields}->[1] = $flag;
+	$self->{_flag_cached} = $flag;
 	return;
 }
 
@@ -593,12 +635,23 @@ sub set_second_in_pair {
 
 
 ####
+sub _parse_flag {
+	my $self = shift;
+
+	unless (defined $self->{_flag_cached}) {
+		$self->{_flag_cached} = $self->{_fields}->[1];
+	}
+
+	return $self->{_flag_cached};
+}
+
+
+####
 sub _get_bit_val {
 	my $self = shift;
 	my ($bit_position) = @_;
 
-	my $flag = $self->get_flag();
-	return($flag & $bit_position);
+	return($self->_parse_flag() & $bit_position);
 }
 
 
@@ -611,7 +664,7 @@ sub _set_bit_val {
 		confess "Error, need bit position and value";
 	}
 	
-	my $flag = $self->get_flag();
+	my $flag = $self->_parse_flag();
 
 	if ($bit_val) {
 		$flag |= $bit_position;
@@ -621,7 +674,8 @@ sub _set_bit_val {
 		$flag &= ~$bit_position;
 	}
 	
-	$self->set_flag($flag);
+	$self->{_fields}->[1] = $flag;
+	$self->{_flag_cached} = $flag;
 }
 
 
