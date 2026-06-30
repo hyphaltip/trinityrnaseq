@@ -3,6 +3,10 @@ name = "trinity_bio"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "trinity_bio"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 memmap2 = "0.9"
 rayon = "1.10"

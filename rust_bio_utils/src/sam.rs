@@ -317,9 +317,32 @@ impl SAMEntryOptimized {
     #[inline]
     pub fn get_position(&self) -> i32 { self.field(3).parse().unwrap_or(0) }
     #[inline]
+    pub fn get_mapq(&self) -> u8 { self.field(4).parse().unwrap_or(255) }
+    #[inline]
     pub fn get_cigar(&self) -> &str { self.field(5) }
     #[inline]
+    pub fn get_rnext(&self) -> &str { self.field(6) }
+    #[inline]
+    pub fn get_pnext(&self) -> i32 { self.field(7).parse().unwrap_or(0) }
+    #[inline]
+    pub fn get_tlen(&self) -> i32 { self.field(8).parse().unwrap_or(0) }
+    #[inline]
     pub fn get_seq(&self) -> &str { self.field(9) }
+    #[inline]
+    pub fn get_qual(&self) -> &str { self.field(10) }
+
+    #[inline]
+    pub fn is_paired(&self) -> bool { self.get_flag() & 0x1 != 0 }
+    #[inline]
+    pub fn is_proper_pair(&self) -> bool { self.get_flag() & 0x2 != 0 }
+    #[inline]
+    pub fn is_unmapped(&self) -> bool { self.get_flag() & 0x4 != 0 }
+    #[inline]
+    pub fn is_reverse_strand(&self) -> bool { self.get_flag() & 0x10 != 0 }
+    #[inline]
+    pub fn is_first_in_pair(&self) -> bool { self.get_flag() & 0x40 != 0 }
+    #[inline]
+    pub fn is_second_in_pair(&self) -> bool { self.get_flag() & 0x80 != 0 }
 
     #[inline]
     pub fn get_cigar_parsed(&self) -> &CigarString { &self.cigar }

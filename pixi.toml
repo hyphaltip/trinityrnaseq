@@ -45,6 +45,7 @@ libtool = ">=2.4"
 zlib = ">=1.2"
 bzip2 = ">=1.0"
 git = ">=2.30"
+libffi = ">=3.5.2,<4"
 
 [activation]
 scripts = ["activation.sh"]
