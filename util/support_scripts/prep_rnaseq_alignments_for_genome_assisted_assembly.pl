@@ -199,7 +199,8 @@ sub prep_read_partitions {
 
 
     ## extract reads per partition
-    $cmd = "$UTIL_DIR/extract_reads_per_partition.pl --partitions_gff $partitions_file "
+    my $extract_reads = &find_rust_binary("extract_reads_per_partition") || "$UTIL_DIR/extract_reads_per_partition.pl";
+    $cmd = "$extract_reads --partitions_gff $partitions_file "
         . " --coord_sorted_SAM $sam"
         . " --parts_per_directory $parts_per_dir"
         . " --min_reads_per_partition $min_reads_per_partition ";

@@ -100,7 +100,7 @@ sub profile_strand {
 sub profile_strand_rust {
     my ($sam, $strand) = @_;
 
-    # 1. SAM_to_frag_coords.pl (still Perl — external sort dominates)
+    # 1. SAM_to_frag_coords.pl (internally uses Rust sam_to_read_coords)
     my $cmd = "$UTIL_DIR/SAM_to_frag_coords.pl --CPU $CPU --sort_buffer $sort_buffer "
             . "--sam $sam --min_insert_size 1 --max_insert_size $max_intron_length";
     run_timed("SAM_to_frag_coords[$strand]", $cmd) unless (-s "$sam.frag_coords");
@@ -114,8 +114,9 @@ sub profile_strand_rust {
     $cmd = "$rust_define_parts $sam.frag_coverage.wig $min_coverage $strand > $partitions_file";
     run_timed("define_coverage_partitions[$strand]", $cmd) unless (-s "$partitions_file.ok");
 
-    # 4. extract_reads_per_partition.pl (still Perl)
-    $cmd = "$UTIL_DIR/extract_reads_per_partition.pl --partitions_gff $partitions_file "
+    # 4. extract_reads_per_partition (Rust)
+    my $rust_extract = "$RUST_DIR/extract_reads_per_partition";
+    $cmd = "$rust_extract --partitions_gff $partitions_file "
          . "--coord_sorted_SAM $sam --parts_per_directory $parts_per_dir "
          . "--min_reads_per_partition $min_reads_per_partition";
     if ($SS_lib_type) { $cmd .= " --SS_lib_type $SS_lib_type"; }

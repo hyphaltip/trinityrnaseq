@@ -107,18 +107,25 @@ main: {
 }
 
 ####
+sub find_rust_binary {
+    my ($name) = @_;
+    my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
+    my $path = "$rust_dir/$name";
+    return (-x $path) ? $path : undef;
+}
+
+
 sub extract_read_coords {
     my ($read_coords_file) = @_;
-    # AP: I think this is very expensive (more than 20' for 12G SAM)
-    # option 1) the same information could be derived by parsing the BAM file
-    # and cut -f 1,2,3,7,8,4,9,10 -> there will be two identical (1) fields, if paired the one with (9)>0 is the /1 one||the one on the plus strand (from (2)) could be assigned as the /1 one
-    # generally, i don't see the need to have to create a SAM file in the first place... 
-    # another benefit of samtools view bam <region> is that we could extract each scaffold separately (would help with sort...)
-    # option 2) use samtools depth instead of wig file???
-    
-    ## Every read processed.
     
     print STDERR "-extracting read coordinates from $sam_file into $read_coords_file\n\n";
+    
+    my $rust_bin = find_rust_binary("sam_to_read_coords");
+    if ($rust_bin) {
+        my $cmd = "$rust_bin $sam_file $read_coords_file";
+        &process_cmd($cmd);
+        return;
+    }
     
     my $sam_reader = new SAM_reader($sam_file);
     
@@ -128,18 +135,11 @@ sub extract_read_coords {
         
         my $sam_entry = $sam_reader->get_next();
         
-        # unless ($sam_entry->get_mate_scaffold_name() eq "=" || $sam_entry->get_mate_scaffold_name() eq $sam_entry->get_scaffold_name()) { next; }
-        # commenting out above - just describe the reads, let the other routine handle the fragment definition.
-
-
         eval {
             my $scaffold = $sam_entry->get_scaffold_name();
             my $core_read_name = $sam_entry->get_core_read_name();
             my $read_name = $sam_entry->get_read_name();
             my $full_read_name = $sam_entry->reconstruct_full_read_name();
-            
-            #print "read_name: $read_name, full_read_name: $full_read_name\n";
-            
             
             my $pair_side = ".";
             if ($full_read_name =~ m|/([12])$|) {
@@ -152,7 +152,6 @@ sub extract_read_coords {
             my $mate_scaff_pos = $sam_entry->get_mate_scaffold_position();
             my ($read_start, $read_end) = $sam_entry->get_genome_span();
             
-            
             print $ofh join("\t", $scaffold, $core_read_name, $pair_side, $read_start, $read_end) . "\n" if $scaffold ne '*' && $read_start && $read_end;
         };
 
@@ -162,10 +161,8 @@ sub extract_read_coords {
     }
     
     close $ofh;
-
     
     return;
-        
 }
 
 
