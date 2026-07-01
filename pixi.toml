@@ -1,0 +1,57 @@
+[workspace]
+name = "trinityrnaseq"
+version = "2.15.1"
+description = "Trinity RNA-Seq De novo Transcriptome Assembly"
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[tasks]
+# Build everything from source (Inchworm, Chrysalis, plugins, Rust binaries)
+build = { cmd = "make all", depends-on = ["configure"] }
+
+# Build only the Rust optimization binaries
+build-rust = "cd rust_bio_utils && cargo build --release"
+
+# Run Trinity installation tests
+test = "make test"
+
+# Run a small Trinity assembly test
+test-trinity = "make test_trinity"
+
+# Clean all build artifacts
+clean = "make clean && cd rust_bio_utils && cargo clean"
+
+# Launch the Trinity pipeline
+trinity = "Trinity"
+
+# Configure step for bamsifter's htslib submodule
+configure = "cd trinity-plugins/bamsifter && ./build_htslib.sh"
+
+[dependencies]
+# Runtime dependencies
+perl = ">=5.32"
+samtools = ">=1.17"
+bowtie2 = ">=2.5"
+jellyfish = ">=2.2"
+python = ">=3.10"
+openjdk = ">=11"
+# Build dependencies
+cmake = ">=3.20"
+make = ">=4"
+rust = ">=1.70"
+autoconf = ">=2.69"
+automake = ">=1.16"
+libtool = ">=2.4"
+zlib = ">=1.2"
+bzip2 = ">=1.0"
+git = ">=2.30"
+libffi = ">=3.5.2,<4"
+# C/C++ compilers for Rust build integration
+gcc = ">=11"
+gxx = ">=11"
+# Benchmarking and profiling tools (optional)
+time = ">=1.9"
+bc = ">=1.7"
+
+[activation]
+scripts = ["activation.sh"]

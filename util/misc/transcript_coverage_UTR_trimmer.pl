@@ -93,7 +93,8 @@ main: {
     &process_cmd($cmd) unless (-s "$sam_file_to_process.frag_coords");
     
     ## define coverage
-    $cmd = "$UTIL_DIR/fragment_coverage_writer.pl $sam_file_to_process.frag_coords > $sam_file_to_process.frag_coverage.wig";
+    my $frag_writer = &find_rust_binary("fragment_coverage_writer") || "$UTIL_DIR/fragment_coverage_writer.pl";
+    $cmd = "$frag_writer $sam_file_to_process.frag_coords > $sam_file_to_process.frag_coverage.wig";
     &process_cmd($cmd) unless (-s "$sam_file_to_process.frag_coverage.wig");
     
     my $wig_parser = new WigParser("$sam_file_to_process.frag_coverage.wig");
@@ -148,11 +149,21 @@ main: {
 
 
 ####
+sub find_rust_binary {
+    my ($name) = @_;
+    return undef if $ENV{TRINITY_NO_RUST};
+    my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
+    my $path = "$rust_dir/$name";
+    return (-x $path) ? $path : undef;
+}
+
+
+####
 sub process_cmd {
 	my ($cmd) = @_;
 
 	print STDERR "CMD: $cmd\n";
-	
+
 	my $ret = system($cmd);
 
 	if ($ret) {

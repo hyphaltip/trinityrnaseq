@@ -141,7 +141,8 @@ main: {
     
   # The above creates a .frag_coords file.  Use this to compute fragment-level coverage
   my $frag_coverage_file = "$frag_coords_file.wig";
-  &process_cmd("$util_dir/fragment_coverage_writer.pl $frag_coords_file > $frag_coverage_file") unless (-e $frag_coverage_file);
+  my $frag_writer = &find_rust_binary("fragment_coverage_writer") || "$util_dir/fragment_coverage_writer.pl";
+  &process_cmd("$frag_writer $frag_coords_file > $frag_coverage_file") unless (-e $frag_coverage_file);
     
     
   ## define the transcript clip points:
@@ -158,9 +159,19 @@ main: {
 
 
 ####
+sub find_rust_binary {
+    my ($name) = @_;
+    return undef if $ENV{TRINITY_NO_RUST};
+    my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
+    my $path = "$rust_dir/$name";
+    return (-x $path) ? $path : undef;
+}
+
+
+####
 sub process_cmd {
   my ($cmd) = @_;
-	
+
   print "CMD: $cmd\n";
 
   my $ret = system($cmd);

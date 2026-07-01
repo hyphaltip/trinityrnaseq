@@ -1,0 +1,68 @@
+name: trinity-rust-optimized
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Compiler and build tools
+  - gcc
+  - gxx
+  - make
+  - cmake
+  - autoconf
+  - automake
+  - libtool
+  - rust
+  - cargo
+
+  # Perl
+  - perl >=5.32
+  - perl-module-cpan
+
+  # Required bioinformatics tools
+  - samtools >=1.17
+  - bowtie2 >=2.5
+  - jellyfish >=2.2
+
+  # Python
+  - python >=3.10
+  - numpy
+  - pip
+
+  # Java
+  - openjdk >=11
+
+  # Libraries and dev headers
+  - zlib
+  - bzip2
+  - libffi
+  - libcurl
+  - openssl
+  - ncurses
+  - pcre
+  - libblas
+  - sqlite
+
+  # Optional: for abundance estimation
+  - bowtie >=1.2
+  - rsem
+  - salmon
+  - kallisto
+
+  # Optional: for analysis
+  - r-base >=4.2
+  - bioconductor-edger
+  - bioconductor-deseq2
+  - bioconductor-qvalue
+
+  # Misc
+  - git
+  - wget
+  - curl
+
+  # Pip dependencies
+  - pip
+
+  - pip:
+    - MultiQC
+    - HTSeq

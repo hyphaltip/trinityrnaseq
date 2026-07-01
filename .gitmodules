@@ -1,10 +1,12 @@
 [submodule "trinityrnaseq.wiki"]
 	path = trinityrnaseq.wiki
 	url = https://github.com/trinityrnaseq/trinityrnaseq.wiki.git
+	branch = master
 
 [submodule "trinity_ext_sample_data"]
 	path = trinity_ext_sample_data
 	url = https://github.com/trinityrnaseq/trinity_ext_sample_data.git
+	branch = master
 [submodule "Inchworm"]
 	path = Inchworm
 	url = https://github.com/trinityrnaseq/Inchworm.git
@@ -18,6 +20,7 @@
 [submodule "trinity-plugins/bamsifter"]
 	path = trinity-plugins/bamsifter
 	url = https://github.com/trinityrnaseq/bamsifter.git
+	branch = master
 [submodule "trinity-plugins/htslib"]
 	path = trinity-plugins/htslib
 	url = https://github.com/samtools/htslib.git

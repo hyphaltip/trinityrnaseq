@@ -17,7 +17,7 @@ else
 endif
 
 
-all: inchworm_target chrysalis_target trinity_essentials
+all: inchworm_target chrysalis_target trinity_essentials rust_bio_target
 	sh ./util/support_scripts/trinity_install_tests.sh
 
 
@@ -26,6 +26,9 @@ no_bamsifter: inchworm_target chrysalis_target
 
 install:
 	util/support_scripts/trinity_installer.py
+
+rust_bio_target:
+		cd rust_bio_utils && cargo build --release
 
 inchworm_target:
 	@echo Using $(TRINITY_COMPILER) compiler for Inchworm and Chrysalis
@@ -54,9 +57,10 @@ test:
 
 clean:
 	cd Inchworm && $(MAKE) clean
-	cd Chrysalis && $(MAKE) clean 
-	cd trinity-plugins && $(MAKE) clean 
+	cd Chrysalis && $(MAKE) clean
+	cd trinity-plugins && $(MAKE) clean
 	cd sample_data/ && $(MAKE) clean
+	cd rust_bio_utils && cargo clean
 
 
 test_trinity:

@@ -22,7 +22,7 @@ use Data::Dumper;
 
 
 
-my $VERSION = "Trinity-v2.15.1";
+my $VERSION = "Trinity-v2.15.3-hyphaltip";
 #my $VERSION = "__BLEEDING_EDGE__"; 
 
 
@@ -100,7 +100,8 @@ my $SE_path_reinforcement_distance = 25;
 
 my $bfly_opts = "";
 my $bflyHeapSpaceMax = "10G";
-my $bflyHeapSpaceInit = "1G";
+my $bflyHeapSpaceInit = "256M";  # small init heap: most graphs are tiny; large ones grow to bflyHeapSpaceMax. Reduces per-JVM startup commit across the thousands of Butterfly launches.
+my $bflyStackSpace = "1G";       # thread stack size (-Xss); Butterfly does deep recursive DFS, so keep this large independent of the init heap.
 
 my $BFLY_JAR = "";
 my $JAVA_OPTS = "";
@@ -426,6 +427,9 @@ my $full_usage = qq^
 #  --bflyHeapSpaceInit <string>    :java initial heap space settings for
 #                                   butterfly (default: $bflyHeapSpaceInit) => yields command
 #                  'java -Xms$bflyHeapSpaceInit -jar Butterfly.jar ... \$bfly_opts'
+#  --bflyStackSpace <string>       :java thread stack size (-Xss) for butterfly
+#                                   (default: $bflyStackSpace); kept large for deep
+#                                   recursive graph traversal, independent of init heap.
 #  --bflyGCThreads <int>           :threads for garbage collection
 #                                   (default: $bflyGCThreads))
 #  --bflyCPU <int>                 :CPUs to use (default will be normal 
@@ -713,6 +717,7 @@ my $ALREADY_SALMON_FILTERED = 0;
     'bfly_opts=s'           => \$bfly_opts,
     'bflyHeapSpaceMax=s'    => \$bflyHeapSpaceMax,
     'bflyHeapSpaceInit=s'   => \$bflyHeapSpaceInit,
+    'bflyStackSpace=s'      => \$bflyStackSpace,
     'bflyGCThreads=i'       => \$bflyGCThreads,
     'bflyCPU=i'             => \$bflyCPU,
     'bflyCalculateCPU'      => \$bflyCalculateCPU,
@@ -2105,7 +2110,7 @@ sub run_chrysalis {
 
             my $bowtie2_scoring = "G,20,8"; # default bowtie2 params for local alignment
                         
-            $cmd = "bash -c \" set -o pipefail;$bowtie2_path --local -k 2 --no-unal --threads $CPU -f --score-min $bowtie2_scoring -x $iworm_min100_fa_file $bowtie_reads_fa  | samtools view $PARALLEL_SAMTOOLS_SORT_TOKEN -F4 -Sb - | samtools sort -m $samtools_max_memory $PARALLEL_SAMTOOLS_SORT_TOKEN -no $bowtie_sam_file\" ";  
+            $cmd = "bash -c \" set -o pipefail;$bowtie2_path --local -k 2 --no-unal --threads $CPU --mm -f --score-min $bowtie2_scoring -x $iworm_min100_fa_file $bowtie_reads_fa  | samtools view $PARALLEL_SAMTOOLS_SORT_TOKEN -F4 -u - | samtools sort -m $samtools_max_memory $PARALLEL_SAMTOOLS_SORT_TOKEN -n -o $bowtie_sam_file\" ";
             
             $pipeliner->add_commands( new Command($cmd, "$bowtie_sam_file.ok"));
             
@@ -2370,7 +2375,7 @@ sub run_chrysalis {
             { # butterfly command
                 
 
-                my $bfly_cmd = "java -Xmx$bflyHeapSpaceMax -Xms$bflyHeapSpaceInit -Xss$bflyHeapSpaceInit $JAVA_OPTS ";
+                my $bfly_cmd = "java -Xmx$bflyHeapSpaceMax -Xms$bflyHeapSpaceInit -Xss$bflyStackSpace $JAVA_OPTS ";
         
                 if (defined($bflyGCThreads)) {
                     $bfly_cmd .= " -XX:ParallelGCThreads=$bflyGCThreads ";

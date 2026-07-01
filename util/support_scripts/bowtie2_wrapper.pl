@@ -205,7 +205,7 @@ main: {
         ## run bowtie-build:
         my $builder = "bowtie2-build";
         
-        my $cmd = "$builder -q $target_db $target_db";
+        my $cmd = "$builder -q --threads $CPU -o 3 $target_db $target_db";
         &process_cmd($cmd);
         
         &process_cmd("touch $index_file_checkpoint");
@@ -226,13 +226,13 @@ main: {
     my $cmd;
     if ($left_file && $right_file) {
 
-        $cmd = "bash -c \"set -o pipefail; bowtie2 --local -k $num_top_hits --threads $CPU --no-unal $format -X $max_dist_between_pairs -x $target_db -1 $left_file -2 $right_file | samtools sort -@ $CPU -o - - > $output_file\" ";
+        $cmd = "bash -c \"set -o pipefail; bowtie2 --local -k $num_top_hits --threads $CPU --no-unal --mm $format -X $max_dist_between_pairs -x $target_db -1 $left_file -2 $right_file | samtools sort -@ $CPU -o - - > $output_file\" ";
         
 
     }
     else {
         
-        $cmd = "bash -c \"set -o pipefail; bowtie2 --local -k $num_top_hits --threads $CPU --no-unal $format -x $target_db -U $single_file | samtools sort -o - - > $output_file\" ";
+        $cmd = "bash -c \"set -o pipefail; bowtie2 --local -k $num_top_hits --threads $CPU --no-unal --mm $format -x $target_db -U $single_file | samtools sort -@ $CPU -o - - > $output_file\" ";
         
     }
     
@@ -261,7 +261,7 @@ main: {
                 
             push (@to_delete, $sam_file);
         
-            $cmd = "samtools view -bt $target_db.fai $sam_file | samtools sort -o - - > $bam_file"; # .bam ext added auto
+            $cmd = "samtools view -ut $target_db.fai $sam_file | samtools sort -@ $CPU -o - - > $bam_file"; # .bam ext added auto; -u avoids compressing the intermediate that sort immediately re-reads
                         
             &process_cmd($cmd);
             
