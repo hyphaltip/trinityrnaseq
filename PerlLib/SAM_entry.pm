@@ -6,109 +6,18 @@ use Carp;
 
 my $CIGAR_REGEX = qr/(\d+)([A-Z])/;
 
-# --- FFI setup ---
-my $FFI_OK = 0;
-my $_ffi_parse;
-
-BEGIN {
-    eval {
-        require FFI::Platypus;
-        my $ffi = FFI::Platypus->new();
-
-        # Find the Rust shared library
-        my $lib;
-        for my $dir (
-            "$ENV{HOME}/projects/trinityrnaseq/rust_bio_utils/target/release",
-            "/usr/local/lib/trinityrnaseq",
-            "/opt/trinityrnaseq/lib",
-        ) {
-            my $candidate = "$dir/libtrinity_bio.so";
-            if (-f $candidate) {
-                $lib = $candidate;
-                last;
-            }
-        }
-
-        if ($lib) {
-            $ffi->lib($lib);
-            $ffi->attach(
-                ['sam_entry_parse_ffi' => '_ffi_parse'],
-                ['string', 'opaque', 'size_t'] => 'int'
-            );
-            $FFI_OK = 1;
-        }
-    };
-}
-
 # --- Constructor ---
 
 sub new {
     my ($class, $line) = @_;
     confess "Error, need sam text line as parameter" unless defined $line;
 
-    if ($FFI_OK) {
-        return _new_ffi($class, $line);
-    }
-    return _new_perl($class, $line);
-}
-
-sub _new_ffi {
-    my ($class, $line) = @_;
-
     chomp $line;
     my @fields = split(/\t/, $line);
 
     my $self = bless {
         _line => $line,
         _fields => \@fields,
-        _ffi => 1,
-    }, $class;
-
-    # Call Rust to parse and compute all values
-    my $buf = "\0" x 65536;
-    my $n = _ffi_parse($line, $buf, length($buf));
-
-    if ($n < 0) {
-        # Fall back to Perl
-        $self->{_ffi} = 0;
-        return $self;
-    }
-
-    # Truncate buffer to actual length and split
-    substr($buf, $n) = '';
-    my @v = split(/\t/, $buf, -1);
-
-    # Store pre-computed values
-    $self->{_genome_start}  = $v[11];
-    $self->{_genome_end}    = $v[12];
-    $self->{_read_start}    = $v[13];
-    $self->{_read_end}      = $v[14];
-    $self->{_align_len}     = $v[15];
-    $self->{_query_strand}  = $v[16];
-    $self->{_mate_strand}   = $v[17];
-    $self->{_is_paired}     = $v[18];
-    $self->{_is_proper}     = $v[19];
-    $self->{_is_unmapped}   = $v[20];
-    $self->{_is_mate_unmap} = $v[21];
-    $self->{_is_reverse}    = $v[22];
-    $self->{_is_mate_rev}   = $v[23];
-    $self->{_is_first}      = $v[24];
-    $self->{_is_second}     = $v[25];
-    $self->{_is_dup}        = $v[26];
-
-    return $self;
-}
-
-sub _new_perl {
-    my ($class, $line) = @_;
-
-    chomp $line;
-    my @fields = split(/\t/, $line);
-
-    my $self = bless {
-        _line => $line,
-        _fields => \@fields,
-        _ffi => 0,
     }, $class;
 
     return $self;
@@ -180,13 +89,12 @@ sub set_flag {
     my ($self, $flag) = @_;
     confess "Error, need flag value" unless defined $flag;
     $self->{_fields}[1] = $flag;
-    $self->{_ffi} = 0;  # Invalidate FFI cache
+    delete $self->{_alignment_coords};  # strand bit affects cached CIGAR coords
     return;
 }
 
 sub is_paired {
     my $self = shift;
-    return $self->{_is_paired} if $self->{_ffi};
     return $self->get_flag() & 0x1 ? 1 : 0;
 }
 
@@ -198,7 +106,6 @@ sub set_paired {
 
 sub is_proper_pair {
     my $self = shift;
-    return $self->{_is_proper} if $self->{_ffi};
     return $self->get_flag() & 0x2 ? 1 : 0;
 }
 
@@ -210,7 +117,6 @@ sub set_proper_pair {
 
 sub is_query_unmapped {
     my $self = shift;
-    return $self->{_is_unmapped} if $self->{_ffi};
     return $self->get_flag() & 0x4 ? 1 : 0;
 }
 
@@ -222,7 +128,6 @@ sub set_query_unmapped {
 
 sub is_mate_unmapped {
     my $self = shift;
-    return $self->{_is_mate_unmap} if $self->{_ffi};
     return $self->get_flag() & 0x8 ? 1 : 0;
 }
 
@@ -234,7 +139,6 @@ sub set_mate_unmapped {
 
 sub is_duplicate {
     my $self = shift;
-    return $self->{_is_dup} if $self->{_ffi};
     return $self->get_flag() & 0x400 ? 1 : 0;
 }
 
@@ -246,7 +150,6 @@ sub set_duplicate {
 
 sub get_query_strand {
     my $self = shift;
-    return $self->{_query_strand} if $self->{_ffi};
     return $self->get_flag() & 0x10 ? '-' : '+';
 }
 
@@ -258,7 +161,6 @@ sub set_query_strand {
 
 sub get_mate_strand {
     my $self = shift;
-    return $self->{_mate_strand} if $self->{_ffi};
     return $self->get_flag() & 0x20 ? '-' : '+';
 }
 
@@ -270,7 +172,6 @@ sub set_mate_strand {
 
 sub is_first_in_pair {
     my $self = shift;
-    return $self->{_is_first} if $self->{_ffi};
     return $self->get_flag() & 0x40 ? 1 : 0;
 }
 
@@ -282,7 +183,6 @@ sub set_first_in_pair {
 
 sub is_second_in_pair {
     my $self = shift;
-    return $self->{_is_second} if $self->{_ffi};
     return $self->get_flag() & 0x80 ? 1 : 0;
 }
 
@@ -315,10 +215,6 @@ sub _set_bit_val {
 
 sub get_genome_span {
     my $self = shift;
-    if ($self->{_ffi}) {
-        return ($self->{_genome_start}, $self->{_genome_end});
-    }
-    # Perl fallback
     my ($genome_aref, $read_aref) = $self->get_alignment_coords();
     my @coords;
     foreach my $genome_coordset (@$genome_aref) {
@@ -330,10 +226,6 @@ sub get_genome_span {
 
 sub get_read_span {
     my $self = shift;
-    if ($self->{_ffi}) {
-        return ($self->{_read_start}, $self->{_read_end});
-    }
-    # Perl fallback
     my ($genome_aref, $read_aref) = $self->get_alignment_coords();
     my @coords;
     foreach my $read_coordset (@$read_aref) {
@@ -345,10 +237,6 @@ sub get_read_span {
 
 sub get_alignment_length {
     my $self = shift;
-    if ($self->{_ffi}) {
-        return $self->{_align_len};
-    }
-    # Perl fallback
     my ($genome_coords_aref, $read_coords_aref) = $self->get_alignment_coords();
     my $sum_len = 0;
     my @genome_coords = @$genome_coords_aref;
@@ -362,6 +250,10 @@ sub get_alignment_length {
 sub get_alignment_coords {
     my $self = shift;
 
+    if ($self->{_alignment_coords}) {
+        return @{$self->{_alignment_coords}};
+    }
+
     my $genome_lend = $self->get_aligned_position();
     my $alignment = $self->get_cigar_alignment();
 
@@ -374,9 +266,14 @@ sub get_alignment_coords {
     my @query_coords;
     my $sum_hardmasked_query = 0;
 
-    while ($alignment =~ /$CIGAR_REGEX/g) {
-        my $len = $1;
-        my $code = $2;
+    # Tokenize in one list-context match rather than a while(//g) loop:
+    # avoids re-entering the regex engine per op, which matters most for
+    # spliced/indel-heavy CIGARs with many ops.
+    my @tokens = $alignment =~ /$CIGAR_REGEX/g;  # (len1, code1, len2, code2, ...)
+
+    for (my $i = 0; $i < @tokens; $i += 2) {
+        my $len  = $tokens[$i];
+        my $code = $tokens[$i + 1];
 
         unless ($code =~ /^[MSDNIH]$/) {
             confess "Error, cannot parse cigar code [$code] " . $self->toString();
@@ -419,6 +316,7 @@ sub get_alignment_coords {
         @query_coords = @revcomp_coords;
     }
 
+    $self->{_alignment_coords} = [\@genome_coords, \@query_coords];
     return (\@genome_coords, \@query_coords);
 }
 
