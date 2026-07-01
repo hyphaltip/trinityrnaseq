@@ -157,8 +157,11 @@ fn parse_sam_line(line: &str) -> Option<String> {
 }
 
 fn compute_genome_span(cigar: &str, position: i64) -> (i32, i32) {
+    // Matches Perl SAM_entry::get_alignment_coords(), which returns ([], [])
+    // for cigar '*'/empty, making get_genome_span() return (undef, undef) --
+    // i.e. no aligned genome span, not a single-base span at POS.
     if cigar == "*" || cigar.is_empty() {
-        return (position as i32, position as i32);
+        return (0, 0);
     }
 
     let mut genome_pos: i64 = position - 1; // Convert to 0-based
@@ -203,7 +206,9 @@ fn compute_genome_span(cigar: &str, position: i64) -> (i32, i32) {
     if has_coords {
         (first_start as i32, last_end as i32)
     } else {
-        (position as i32, position as i32)
+        // No M/=/X op in the CIGAR (e.g. all soft-clip): Perl's loop never
+        // pushes a genome coord in this case either, so there is no span.
+        (0, 0)
     }
 }
 

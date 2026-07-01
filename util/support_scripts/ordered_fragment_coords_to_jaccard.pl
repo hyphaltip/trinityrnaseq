@@ -101,21 +101,46 @@ if (@ARGV) {
 }
 
 main: {
-	
-        
+
+
     ## sort by rend
     my $rend_sorted_frags_file = "$lend_sorted_frags_file.sort_by_rend";
     my $cmd = "sort -T . -k1,1 -k4,4n $lend_sorted_frags_file > $rend_sorted_frags_file";
     &process_cmd($cmd) unless (-s "$rend_sorted_frags_file");
-    
+
     print STDERR "-processing jaccard pair sensor\n";
-    &compute_jaccard_wig($lend_sorted_frags_file, $rend_sorted_frags_file, $window_length);
-    
-    
+
+    ## The Rust fast path only implements the default WIG output (with optional -e),
+    ## matching MIN_FRAGS=0. Fall back to Perl for --full, --full_extreme, or -M.
+    my $rust_bin;
+    if (!$full_flag && $MIN_FRAGS == 0) {
+        $rust_bin = &find_rust_binary("ordered_fragment_coords_to_jaccard");
+    }
+
+    if ($rust_bin) {
+        my $extended_arg = $extended_flag ? 1 : 0;
+        $cmd = "$rust_bin $lend_sorted_frags_file $rend_sorted_frags_file $window_length $pseudocounts $extended_arg";
+        &process_cmd($cmd);
+    }
+    else {
+        &compute_jaccard_wig($lend_sorted_frags_file, $rend_sorted_frags_file, $window_length);
+    }
+
+
     exit(0);
 
 
 
+}
+
+
+####
+sub find_rust_binary {
+    my ($name) = @_;
+    return undef if $ENV{TRINITY_NO_RUST};
+    my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
+    my $path = "$rust_dir/$name";
+    return (-x $path) ? $path : undef;
 }
 
 

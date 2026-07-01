@@ -57,9 +57,10 @@ test:
 
 clean:
 	cd Inchworm && $(MAKE) clean
-	cd Chrysalis && $(MAKE) clean 
-	cd trinity-plugins && $(MAKE) clean 
+	cd Chrysalis && $(MAKE) clean
+	cd trinity-plugins && $(MAKE) clean
 	cd sample_data/ && $(MAKE) clean
+	cd rust_bio_utils && cargo clean
 
 
 test_trinity:

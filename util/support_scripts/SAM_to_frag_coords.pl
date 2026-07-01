@@ -109,6 +109,7 @@ main: {
 ####
 sub find_rust_binary {
     my ($name) = @_;
+    return undef if $ENV{TRINITY_NO_RUST};
     my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
     my $path = "$rust_dir/$name";
     return (-x $path) ? $path : undef;
@@ -180,73 +181,82 @@ sub extract_frag_coords {
     }
     
     ## define fragment pair coordinate span
-    open (my $fh, "$read_coords_file") or die $!;
-    
-    open (my $ofh, ">$pair_frag_coords_file") or die $!;
-    
-    my $prev_reported_pair = "";
-    my $prev_reported_single = "";
-    
-    my $first = <$fh>;
-    chomp $first;
-    while (my $second = <$fh>) {
-        next if ($first =~/^\*/ && $second =~/^\*/); # both unmapped
-        chomp $second;
-        
-        my ($scaffA, $readA, $readA_pair_side, $lendA, $rendA) = split(/\t/, $first);
-        my ($scaffB, $readB, $readB_pair_side, $lendB, $rendB) = split(/\t/, $second);
-        
-        my $got_pair_flag = 0;
-        if ($readA eq $readB 
-            && $scaffA eq $scaffB 
-            && $readA_pair_side ne $readB_pair_side 
-            && $readA_pair_side =~ /\d/ && $readB_pair_side =~ /\d/) {
-            
-            my @coords = sort {$a<=>$b} ($lendA, $rendA, $lendB, $rendB);
-            my $min = shift @coords;
-            my $max = pop @coords;
-            
-            my $insert_size = $max - $min + 1;
-            if ($insert_size >= $MIN_INSERT_SIZE && $insert_size <= $MAX_INSERT_SIZE && $readA ne $prev_reported_pair) {
-                # treat as proper pair
-                
-                print $ofh join("\t", $scaffA, $readA, $min, $max) . "\n";
-                $prev_reported_pair = $readA; # only one proper pair to be reported. - not random though, first one encountered.
-                
+    my $rust_bin = find_rust_binary("frag_coords_from_read_coords");
+    if ($rust_bin) {
+        my $no_single_arg = $NO_SINGLE ? 1 : 0;
+        my $cmd = "$rust_bin $read_coords_file $pair_frag_coords_file $MIN_INSERT_SIZE $MAX_INSERT_SIZE $no_single_arg";
+        &process_cmd($cmd);
+    }
+    else {
+
+        open (my $fh, "$read_coords_file") or die $!;
+
+        open (my $ofh, ">$pair_frag_coords_file") or die $!;
+
+        my $prev_reported_pair = "";
+        my $prev_reported_single = "";
+
+        my $first = <$fh>;
+        chomp $first;
+        while (my $second = <$fh>) {
+            next if ($first =~/^\*/ && $second =~/^\*/); # both unmapped
+            chomp $second;
+
+            my ($scaffA, $readA, $readA_pair_side, $lendA, $rendA) = split(/\t/, $first);
+            my ($scaffB, $readB, $readB_pair_side, $lendB, $rendB) = split(/\t/, $second);
+
+            my $got_pair_flag = 0;
+            if ($readA eq $readB
+                && $scaffA eq $scaffB
+                && $readA_pair_side ne $readB_pair_side
+                && $readA_pair_side =~ /\d/ && $readB_pair_side =~ /\d/) {
+
+                my @coords = sort {$a<=>$b} ($lendA, $rendA, $lendB, $rendB);
+                my $min = shift @coords;
+                my $max = pop @coords;
+
+                my $insert_size = $max - $min + 1;
+                if ($insert_size >= $MIN_INSERT_SIZE && $insert_size <= $MAX_INSERT_SIZE && $readA ne $prev_reported_pair) {
+                    # treat as proper pair
+
+                    print $ofh join("\t", $scaffA, $readA, $min, $max) . "\n";
+                    $prev_reported_pair = $readA; # only one proper pair to be reported. - not random though, first one encountered.
+
+                }
+                else {
+                    # treat as unpaired reads
+                    unless ($NO_SINGLE) {
+                        if ($prev_reported_single ne $readA) {
+                            print $ofh join("\t", $scaffA, $readA . "/$readA_pair_side", $lendA, $rendA) . "\n";
+                            print $ofh join("\t", $scaffB, $readB . "/$readB_pair_side", $lendB, $rendB) . "\n";
+                        }
+                        $prev_reported_single = $readA;
+                    }
+                }
+
+                $first = <$fh>; # prime first
+                chomp $first if $first;
             }
             else {
-                # treat as unpaired reads
+                # not paired
                 unless ($NO_SINGLE) {
                     if ($prev_reported_single ne $readA) {
                         print $ofh join("\t", $scaffA, $readA . "/$readA_pair_side", $lendA, $rendA) . "\n";
-                        print $ofh join("\t", $scaffB, $readB . "/$readB_pair_side", $lendB, $rendB) . "\n";
                     }
-                    $prev_reported_single = $readA;
+                    $prev_reported_single = $readA; # only letting one slip through.
                 }
-            }
-    
-            $first = <$fh>; # prime first
-            chomp $first if $first;
-        }
-        else {
-            # not paired
-            unless ($NO_SINGLE) {
-                if ($prev_reported_single ne $readA) {
-                    print $ofh join("\t", $scaffA, $readA . "/$readA_pair_side", $lendA, $rendA) . "\n";
-                }
-                $prev_reported_single = $readA; # only letting one slip through.
-            }
-            
-            $first = $second;
-            next;
-        }
-        
-        
 
+                $first = $second;
+                next;
+            }
+
+
+
+        }
+
+        close $ofh;
+        close $fh;
     }
-
-    close $ofh;
-    close $fh;
 
 
     my $cmd = "$sort_exec -S$sort_buffer -T . -k1,1 -k3,3n $pair_frag_coords_file > $pair_frag_coords_file.coord_sorted";

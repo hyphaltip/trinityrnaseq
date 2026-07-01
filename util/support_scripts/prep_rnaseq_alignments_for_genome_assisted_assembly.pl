@@ -165,6 +165,7 @@ main: {
 
 sub find_rust_binary {
     my ($name) = @_;
+    return undef if $ENV{TRINITY_NO_RUST};
     my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
     my $path = "$rust_dir/$name";
     return (-x $path) ? $path : undef;
