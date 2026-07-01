@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 MAINTAINER bhaas@broadinstitute.org
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -47,6 +47,8 @@ RUN apt-get -qq update && apt-get -qq -y install \
     python3-setuptools \
     rsync \
     texlive-latex-base \
+    texlive \
+    texlive-latex-extra \
     tzdata \
     unzip \
     wget \
@@ -65,19 +67,19 @@ RUN cpanm install URI::Escape
 ENV SRC /usr/local/src
 ENV BIN /usr/local/bin
 
+## Install Rust toolchain (needed for Trinity Rust optimizations)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    . $HOME/.cargo/env && \
+    rustc --version && \
+    cargo --version
+
+ENV PATH=/root/.cargo/bin:$PATH
 
 #####
 # Install R
-
-WORKDIR $SRC
-#####
-# Install R
-
 WORKDIR $SRC
 
-RUN apt-get install -y texlive texlive-latex-extra
-
-ENV R_VERSION=R-4.2.0
+ENV R_VERSION=R-4.3.1
 
 RUN curl https://cran.r-project.org/src/base/R-4/$R_VERSION.tar.gz -o $R_VERSION.tar.gz && \
     tar xvf $R_VERSION.tar.gz && \
@@ -169,7 +171,7 @@ RUN wget https://sourceforge.net/projects/bowtie-bio/files/bowtie2/${BOWTIE2_VER
     rm -r bowtie2-${BOWTIE2_VERSION}-linux-x86_64
 
 ## Samtools
-ENV SAMTOOLS_VERSION 1.13
+ENV SAMTOOLS_VERSION 1.18
 RUN wget https://github.com/samtools/samtools/releases/download/${SAMTOOLS_VERSION}/samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     tar xvf samtools-${SAMTOOLS_VERSION}.tar.bz2 && \
     cd samtools-${SAMTOOLS_VERSION} && \
@@ -243,7 +245,7 @@ RUN wget https://github.com/COMBINE-lab/salmon/releases/download/v1.10.0/salmon-
 ## Trinity
 WORKDIR $SRC
 ENV TRINITY_VERSION="2.15.1"
-ENV TRINITY_CO=8f0c44bccc321170b0994b2196f5be27f9c49b10
+ENV TRINITY_CO=08b2274
 
 WORKDIR $SRC
 
@@ -258,6 +260,11 @@ RUN git clone --recursive https://github.com/trinityrnaseq/trinityrnaseq.git && 
     make install && \
     cd ../ && rm -r trinityrnaseq
 
+## Verify Rust binaries are installed
+RUN which sam_to_read_coords && \
+    which extract_reads_per_partition && \
+    echo "Rust binaries verified successfully"
+
 ENV TRINITY_HOME /usr/local/bin
 
 ENV PATH=${TRINITY_HOME}:${PATH}
@@ -265,7 +272,7 @@ ENV PATH=${TRINITY_HOME}:${PATH}
 
 # some cleanup
 WORKDIR $SRC
-RUN rm -r ${R_VERSION} *.tar.gz *.zip *.bz2
+RUN rm -r ${R_VERSION} *.tar.gz *.zip *.bz2 2>/dev/null || true
 
 RUN apt-get -qq -y remove git && \
     apt-get -qq -y autoremove && \
