@@ -1,0 +1,32 @@
+name: trinity-rust-opt
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+platforms:
+  - linux-64
+dependencies:
+  # Bioinformatics tools
+  - perl>=5.32
+  - samtools>=1.17
+  - bowtie2>=2.5
+  - jellyfish>=2.2
+  - python>=3.10
+  - openjdk>=11
+  # Build tools
+  - cmake>=3.20
+  - make>=4
+  - rust>=1.70
+  - autoconf>=2.69
+  - automake>=1.16
+  - libtool>=2.4
+  - zlib>=1.2
+  - bzip2>=1.0
+  - git>=2.30
+  - libffi>=3.5.2,<4
+  # GCC for compilation
+  - gcc_linux-64
+  - gxx_linux-64
+  # Optional: for benchmarking
+  - time
+  - bc
