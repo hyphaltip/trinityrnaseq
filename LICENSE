@@ -11,7 +11,7 @@ modification, are permitted provided that the following conditions are met:
   this list of conditions and the following disclaimer in the documentation
   and/or other materials provided with the distribution.
 
-* Neither the name of the {organization} nor the names of its
+* Neither the name of the trinityrnaseq nor the names of its
   contributors may be used to endorse or promote products derived from
   this software without specific prior written permission.
 
@@ -26,3 +26,11 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+
+## Addendum, 2026-07-01
+
+Ported code to Rust for performance improvement and benchmarked and tested
+with real data to establish bottlenecks and improvements.
+Jason Stajich <jason.stajich{AT}ucr.edu> (@hyphaltip) with help of AI development 
+tools. Distribution, lack of warranty, and reuse are identical for the Rust code
+that was developed.
