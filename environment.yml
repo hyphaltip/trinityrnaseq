@@ -1,4 +1,12 @@
 name: trinity-rust-opt
+# Complete conda environment for the Rust-optimized Trinity fork (v2.16.1_rust).
+#
+# This captures BOTH the build toolchain and the full runtime dependency set,
+# including the downstream abundance-estimation and differential-expression
+# tooling that Trinity's util/ scripts invoke. For a lean *build-only* env use
+# environment-rust.yml instead.
+#
+# Create with:  conda env create -f environment.yml   (or `mamba env create ...`)
 channels:
   - conda-forge
   - bioconda
@@ -6,27 +14,105 @@ channels:
 platforms:
   - linux-64
 dependencies:
-  # Bioinformatics tools
-  - perl>=5.32
-  - samtools>=1.17
-  - bowtie2>=2.5
-  - jellyfish>=2.2
-  - python>=3.10
-  - openjdk>=11
-  # Build tools
-  - cmake>=3.20
-  - make>=4
-  - rust>=1.70
-  - autoconf>=2.69
-  - automake>=1.16
-  - libtool>=2.4
-  - zlib>=1.2
-  - bzip2>=1.0
-  - git>=2.30
-  - libffi>=3.5.2,<4
-  # GCC for compilation
+  ##########################################################################
+  # Build toolchain (compiling Inchworm, Chrysalis, plugins, Rust binaries)
+  ##########################################################################
   - gcc_linux-64
   - gxx_linux-64
-  # Optional: for benchmarking
+  - make >=4
+  - cmake >=3.20
+  - autoconf >=2.69
+  - automake >=1.16
+  - libtool >=2.4
+  - pkg-config
+  - rust >=1.70
+  - cargo
+
+  ##########################################################################
+  # Core interpreters / runtimes
+  ##########################################################################
+  - perl >=5.32
+  - perl-threaded            # Trinity uses `use threads`
+  - python >=3.10
+  - numpy                    # required by several util/ python scripts
+  - openjdk >=11             # Butterfly (Java)
+
+  ##########################################################################
+  # Perl modules used at runtime (normalization, TiedHash/DB_File, URI escape)
+  ##########################################################################
+  - perl-db_file             # PerlLib/TiedHash.pm
+  - perl-uri                 # insilico_read_normalization.pl (URI::Escape)
+
+  ##########################################################################
+  # HARD runtime requirements enforced by Trinity's startup check
+  #   (samtools, jellyfish v2, bowtie2, salmon)
+  ##########################################################################
+  - samtools >=1.17
+  - jellyfish >=2.2
+  - bowtie2 >=2.5
+  - salmon >=1.0             # Trinity aborts at startup unless --no_salmon
+
+  ##########################################################################
+  # Downstream: abundance estimation (align_and_estimate_abundance.pl)
+  ##########################################################################
+  - bowtie >=1.2             # RSEM/eXpress alignment backend (bowtie v1)
+  - rsem
+  - kallisto
+
+  ##########################################################################
+  # Genome-guided assembly aligners (optional, pick as needed)
+  ##########################################################################
+  - hisat2
+  - star
+  - gmap
+
+  ##########################################################################
+  # QC / trimming (Trimmomatic is bundled; fastqc is external)
+  ##########################################################################
+  - fastqc
+
+  ##########################################################################
+  # Downstream: differential expression + clustering (util/R analysis scripts)
+  ##########################################################################
+  - r-base >=4.2
+  - bioconductor-edger
+  - bioconductor-deseq2
+  - bioconductor-qvalue
+  - bioconductor-ctc
+  - bioconductor-biobase
+  - bioconductor-limma
+  - bioconductor-glimma
+  - bioconductor-goseq
+  - bioconductor-go.db
+  - bioconductor-dexseq
+  - bioconductor-rots
+  - bioconductor-tximport
+  - r-ape
+  - r-gplots
+  - r-fastcluster
+  - r-argparse
+  - r-cluster
+  - r-sm
+  - r-phangorn
+  - r-goplot
+
+  ##########################################################################
+  # Libraries / dev headers (for from-source htslib/bamsifter build)
+  ##########################################################################
+  - zlib >=1.2
+  - bzip2 >=1.0
+  - xz
+  - libffi >=3.5.2,<4
+  - libcurl
+  - openssl
+  - ncurses
+  - pcre
+
+  ##########################################################################
+  # Misc utilities
+  ##########################################################################
+  - git >=2.30
+  - wget
+  - curl
   - time
   - bc

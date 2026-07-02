@@ -1,0 +1,89 @@
+{% set version = "2.16.1" %}
+
+package:
+  name: trinity-rust
+  version: {{ version }}
+
+source:
+  # Build from the working tree of this fork (submodules must already be
+  # checked out: Inchworm, Chrysalis, trinity-plugins/*, rust_bio_utils).
+  path: ..
+
+build:
+  number: 0
+  # Not noarch: we compile C++ (Inchworm/Chrysalis/plugins) and Rust binaries.
+  string: "rust_h{{ PKG_HASH }}_{{ PKG_BUILDNUM }}"
+  # Trinity's util scripts assume a POSIX layout; skip non-linux for now.
+  skip: true  # [not linux]
+  # cargo needs network to fetch crates at build time.
+  script_env:
+    - CARGO_NET_OFFLINE
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ compiler('cxx') }}
+    - make >=4
+    - cmake >=3.20
+    - autoconf >=2.69
+    - automake >=1.16
+    - libtool >=2.4
+    - pkg-config
+    - rust >=1.70
+    - cargo
+  host:
+    - zlib >=1.2
+    - bzip2 >=1.0
+    - xz
+    - libcurl
+    - openssl
+    - ncurses
+  run:
+    # interpreters
+    - perl >=5.32
+    - perl-threaded
+    - perl-db_file
+    - perl-uri
+    - python >=3.10
+    - numpy
+    - openjdk >=11
+    # hard runtime requirements (Trinity aborts without these)
+    - samtools >=1.17
+    - jellyfish >=2.2
+    - bowtie2 >=2.5
+    - salmon >=1.0
+    # runtime libs
+    - zlib >=1.2
+    - bzip2 >=1.0
+
+# The heavy downstream stack (R/Bioconductor, RSEM, kallisto, genome aligners)
+# is intentionally NOT a hard `run` dependency, to keep the core package
+# installable and fast. Install it alongside via environment.yml or:
+#   conda install -c bioconda -c conda-forge \
+#     rsem kallisto bowtie hisat2 star gmap fastqc \
+#     bioconductor-edger bioconductor-deseq2 bioconductor-qvalue \
+#     bioconductor-ctc bioconductor-goseq r-fastcluster r-ape r-gplots
+
+test:
+  commands:
+    - Trinity --version
+    - sam_to_read_coords --help 2>&1 | head -1 || true
+    - test -x "${PREFIX}/opt/trinity-{{ version }}/rust_bio_utils/target/release/sam_to_read_coords"
+
+about:
+  home: https://github.com/hyphaltip/trinityrnaseq
+  license: BSD-3-Clause
+  license_file: LICENSE.txt
+  summary: "Trinity RNA-Seq de novo transcriptome assembly (unofficial Rust-optimized fork)"
+  description: |
+    Unofficial fork of Trinity RNA-Seq (v2.16.1_rust) with experimental
+    Rust-accelerated drop-in replacements for the hottest RNA-Seq-guided
+    assembly-prep steps. Falls back to the Perl implementations automatically
+    when the Rust binaries are unavailable (or TRINITY_NO_RUST is set).
+  dev_url: https://github.com/hyphaltip/trinityrnaseq
+
+extra:
+  maintainers:
+    - hyphaltip
+  recipe-maintainers:
+    - hyphaltip

@@ -267,7 +267,7 @@ ENV TRINITY_CO=212df7d9b002ed5de2960bdefaf2216e12985f50
 
 WORKDIR $SRC
 
-RUN git clone --recursive https://github.com/trinityrnaseq/trinityrnaseq.git && \
+RUN git clone --recursive https://github.com/hyphaltip/trinityrnaseq.git && \
     cd trinityrnaseq && \
     git checkout ${TRINITY_CO} && \
     git submodule init && git submodule update && \

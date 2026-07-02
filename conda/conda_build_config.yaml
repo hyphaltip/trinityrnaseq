@@ -1,0 +1,12 @@
+# Pinnings for the trinity-rust conda-build recipe.
+# Keep these aligned with the bioconda toolchain generation where possible.
+c_compiler:
+  - gcc
+c_compiler_version:
+  - "12"
+cxx_compiler:
+  - gxx
+cxx_compiler_version:
+  - "12"
+python:
+  - "3.10"

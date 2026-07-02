@@ -1,7 +1,7 @@
 [workspace]
 name = "trinityrnaseq"
-version = "2.15.1"
-description = "Trinity RNA-Seq De novo Transcriptome Assembly"
+version = "2.16.1"
+description = "Trinity RNA-Seq De novo Transcriptome Assembly (Rust-optimized fork)"
 channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
@@ -28,30 +28,81 @@ trinity = "Trinity"
 configure = "cd trinity-plugins/bamsifter && ./build_htslib.sh"
 
 [dependencies]
-# Runtime dependencies
+# --- Core interpreters / runtimes ---
 perl = ">=5.32"
-samtools = ">=1.17"
-bowtie2 = ">=2.5"
-jellyfish = ">=2.2"
+perl-threaded = "*"          # Trinity uses `use threads`
 python = ">=3.10"
-openjdk = ">=11"
-# Build dependencies
+numpy = "*"                  # required by several util/ python scripts
+openjdk = ">=11"             # Butterfly (Java)
+# --- Perl modules used at runtime ---
+perl-db_file = "*"           # PerlLib/TiedHash.pm
+perl-uri = "*"               # insilico_read_normalization.pl (URI::Escape)
+# --- HARD runtime requirements enforced by Trinity's startup check ---
+samtools = ">=1.17"
+jellyfish = ">=2.2"
+bowtie2 = ">=2.5"
+salmon = ">=1.0"             # Trinity aborts at startup unless --no_salmon
+# --- Build toolchain ---
 cmake = ">=3.20"
 make = ">=4"
 rust = ">=1.70"
 autoconf = ">=2.69"
 automake = ">=1.16"
 libtool = ">=2.4"
+pkg-config = "*"
 zlib = ">=1.2"
 bzip2 = ">=1.0"
-git = ">=2.30"
 libffi = ">=3.5.2,<4"
+git = ">=2.30"
 # C/C++ compilers for Rust build integration
 gcc = ">=11"
 gxx = ">=11"
 # Benchmarking and profiling tools (optional)
 time = ">=1.9"
 bc = ">=1.7"
+
+# Optional feature: downstream abundance estimation, differential expression,
+# QC and genome-guided aligners. Enable via the `full` environment below:
+#   pixi run -e full trinity ...
+[feature.downstream.dependencies]
+# abundance estimation
+bowtie = ">=1.2"
+rsem = "*"
+kallisto = "*"
+# genome-guided aligners
+hisat2 = "*"
+star = "*"
+gmap = "*"
+# QC
+fastqc = "*"
+# differential expression + clustering (util/R scripts)
+r-base = ">=4.2"
+bioconductor-edger = "*"
+bioconductor-deseq2 = "*"
+bioconductor-qvalue = "*"
+bioconductor-ctc = "*"
+bioconductor-biobase = "*"
+bioconductor-limma = "*"
+bioconductor-glimma = "*"
+bioconductor-goseq = "*"
+bioconductor-go.db = "*"
+bioconductor-dexseq = "*"
+bioconductor-rots = "*"
+bioconductor-tximport = "*"
+r-ape = "*"
+r-gplots = "*"
+r-fastcluster = "*"
+r-argparse = "*"
+r-cluster = "*"
+r-sm = "*"
+r-phangorn = "*"
+r-goplot = "*"
+
+[environments]
+# `default` = build + core assembly runtime (lean)
+# `full`    = everything, including downstream analysis tooling
+default = { solve-group = "default" }
+full = { features = ["downstream"], solve-group = "default" }
 
 [activation]
 scripts = ["activation.sh"]

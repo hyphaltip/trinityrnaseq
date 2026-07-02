@@ -1,0 +1,110 @@
+Bootstrap: docker
+From: condaforge/miniforge3:24.9.2-0
+
+# ===========================================================================
+# Rust-optimized Trinity RNA-Seq  (Apptainer / Singularity image)
+#
+# Bundles:
+#   * the full Trinity fork (v2.16.1_rust) built from source with Rust helpers
+#   * the complete conda runtime + downstream analysis stack (environment.yml)
+#
+# Build:
+#   sudo apptainer build trinity-rust.sif Singularity.def
+#   # or rootless:  apptainer build --fakeroot trinity-rust.sif Singularity.def
+#
+# Run a de novo assembly:
+#   apptainer run trinity-rust.sif Trinity --seqType fq --left l.fq --right r.fq \
+#       --max_memory 20G --CPU 8 --output trinity_out
+#
+# Any bundled tool:
+#   apptainer exec trinity-rust.sif salmon --version
+#   apptainer exec trinity-rust.sif samtools --version
+# ===========================================================================
+
+%files
+    . /opt/trinityrnaseq
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+
+    # --- build essentials (compiling Inchworm/Chrysalis/plugins/htslib) -----
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake autoconf automake libtool pkg-config \
+        git ca-certificates curl \
+        libz-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev \
+        libncurses-dev
+    rm -rf /var/lib/apt/lists/*
+
+    # --- Rust toolchain (for building the acceleration binaries) ------------
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+        --default-toolchain stable --profile minimal
+    export PATH="/root/.cargo/bin:${PATH}"
+
+    # --- conda runtime environment from the repo's environment.yml ----------
+    #     (single 'trinity' env used as the image default)
+    mamba env create -n trinity -f /opt/trinityrnaseq/environment.yml
+    export PATH="/opt/conda/envs/trinity/bin:${PATH}"
+
+    # --- Build Trinity from source (C++ + Rust) -----------------------------
+    cd /opt/trinityrnaseq
+    git submodule update --init --recursive || true   # no-op if already present
+    make -C Inchworm
+    make -C Chrysalis
+    make -C trinity-plugins trinity_essentials
+    make -C trinity-plugins plugins
+    ( cd rust_bio_utils && cargo build --release --locked )
+
+    # Verify the Rust helpers landed where Trinity expects them.
+    test -x rust_bio_utils/target/release/sam_to_read_coords
+
+    # --- Entry-point wrapper for Trinity ------------------------------------
+    cat > /usr/local/bin/Trinity <<'EOF'
+#!/bin/bash
+export TRINITY_HOME=/opt/trinityrnaseq
+exec /opt/trinityrnaseq/Trinity "$@"
+EOF
+    chmod +x /usr/local/bin/Trinity
+
+%environment
+    export TRINITY_HOME=/opt/trinityrnaseq
+    export PATH=/opt/conda/envs/trinity/bin:/opt/trinityrnaseq/trinity-plugins/BIN:${PATH}
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+
+%runscript
+    exec "$@"
+
+%test
+    set -e
+    export TRINITY_HOME=/opt/trinityrnaseq
+    /opt/trinityrnaseq/Trinity --version || true
+    test -x /opt/trinityrnaseq/rust_bio_utils/target/release/sam_to_read_coords
+    echo "OK: Trinity + Rust helpers present"
+
+%labels
+    Maintainer Jason Stajich <jasonstajich.phd@gmail.com>
+    Fork https://github.com/hyphaltip/trinityrnaseq
+    Trinity.Version 2.16.1_rust
+    Description Rust-optimized Trinity RNA-Seq fork
+
+%help
+    Rust-optimized Trinity RNA-Seq fork (v2.16.1_rust) bundled with its full
+    conda runtime + downstream analysis stack.
+
+    De novo assembly:
+      apptainer run trinity-rust.sif Trinity --seqType fq \
+          --left reads_1.fq --right reads_2.fq \
+          --max_memory 20G --CPU 8 --output trinity_out
+
+    Run any bundled tool directly:
+      apptainer exec trinity-rust.sif Trinity --version
+      apptainer exec trinity-rust.sif salmon --version
+      apptainer exec trinity-rust.sif samtools --version
+
+    Force off the Rust acceleration (fall back to Perl) for benchmarking:
+      apptainer exec --env TRINITY_NO_RUST=1 trinity-rust.sif Trinity ...
+
+    Bind-mount your working directory so outputs land on the host:
+      apptainer run -B $PWD trinity-rust.sif Trinity ... --output $PWD/trinity_out
