@@ -25,7 +25,7 @@ no_bamsifter: inchworm_target chrysalis_target
 	cd trinity-plugins && $(MAKE) no_bamsifter
 
 install:
-	util/support_scripts/trinity_installer.py
+	python install.py install
 
 rust_bio_target:
 		cd rust_bio_utils && cargo build --release

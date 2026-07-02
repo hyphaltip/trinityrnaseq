@@ -5,6 +5,7 @@ import sys
 import shutil
 import argparse
 import stat
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +65,38 @@ class TrinityInstaller:
                 return False
         return True
 
+    def build(self) -> bool:
+        """Build Trinity components using make."""
+        makefile_path = self.trinity_root / "Makefile"
+
+        if not makefile_path.exists():
+            self.log(f"Makefile not found: {makefile_path}", "ERROR")
+            return False
+
+        self.log("Building Trinity components...", "INFO")
+
+        try:
+            result = subprocess.run(
+                ["make", "all"],
+                cwd=self.trinity_root,
+                capture_output=False,
+                text=True
+            )
+
+            if result.returncode != 0:
+                self.log("Build failed", "ERROR")
+                return False
+
+            self.log("Build completed successfully", "INFO")
+            return True
+
+        except FileNotFoundError:
+            self.log("'make' command not found. Please ensure build-essential is installed", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Build failed with error: {e}", "ERROR")
+            return False
+
     def create_symlink(self) -> bool:
         """Create symlink to Trinity executable."""
         trinity_exe = self.trinity_root / "Trinity"
@@ -109,6 +142,9 @@ class TrinityInstaller:
         if not self.check_permissions():
             self.log(f"No write permission to {self.install_dir}", "ERROR")
             self.log("Try using --install-dir or running with appropriate permissions", "ERROR")
+            return False
+
+        if not self.build():
             return False
 
         if not self.setup_install_directory():
