@@ -1,5 +1,8 @@
 FROM ubuntu:24.04
 MAINTAINER bhaas@broadinstitute.org
+LABEL fork.maintainer="Jason Stajich <jasonstajich.phd@gmail.com>" \
+      fork.repo="https://github.com/hyphaltip/trinityrnaseq" \
+      fork.description="Unofficial fork with experimental Rust optimizations; file fork-specific issues here, not upstream"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
