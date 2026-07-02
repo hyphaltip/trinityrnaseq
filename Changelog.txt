@@ -1,3 +1,18 @@
+
+# Trinity-v2.16.1_rust
+- optional Rust-accelerated drop-in replacements for the hottest steps of RNA-Seq-guided assembly prep (read-coordinate extraction, fragment pairing, coverage/partitioning, Jaccard pair-support scanning); each falls back to the existing Perl implementation automatically if the Rust binary isn't built, and can be forced off via TRINITY_NO_RUST for testing/benchmarking
+- SAM_entry.pm: per-object memoization of CIGAR parsing/genome-span/read-span/alignment-length, plus a faster CIGAR tokenizer; no call-site changes required
+- fixed double BAM compression in bowtie2/samtools piping (bowtie2_wrapper.pl, align_and_estimate_abundance.pl, Chrysalis bowtie2 step)
+- Butterfly JVM heap/stack tuning (separate --bflyStackSpace from --bflyHeapSpaceInit)
+- merged in Trinity-v2.15.2 (Docker/Ubuntu 24.04 update, RSEM auto-pipeline samples-file bugfix)
+
+
+# Trinity-v2.15.2 July 31, 2024
+- updated docker (and apptainer/singularity) to ubuntu 24.04
+- bamsifter compilation issue addressed
+- minor updates to accessory scripts
+
+
 # Trinity-v2.15.1 Feb 5, 2023
 - bamsifter update to ease compilation issues
 - update to contig_ExN50_statistic.pl to provide either transcript (default) or gene based analysis (note, both use the isoform expression matrix!)
