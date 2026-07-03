@@ -123,7 +123,9 @@ sub extract_read_coords {
     
     my $rust_bin = find_rust_binary("sam_to_read_coords");
     if ($rust_bin) {
-        my $cmd = "$rust_bin $sam_file $read_coords_file";
+        my $cmd = ($sam_file =~ /\.bam$/)
+            ? "samtools view $sam_file | $rust_bin - $read_coords_file"
+            : "$rust_bin $sam_file $read_coords_file";
         &process_cmd($cmd);
         return;
     }
