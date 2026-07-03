@@ -1,6 +1,6 @@
 [workspace]
 name = "trinityrnaseq"
-version = "2.16.1"
+version = "2.16.1_rust"
 description = "Trinity RNA-Seq De novo Transcriptome Assembly (Rust-optimized fork)"
 channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
