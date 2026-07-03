@@ -201,9 +201,11 @@ sub prep_read_partitions {
 
     ## extract reads per partition
     my $extract_reads = &find_rust_binary("extract_reads_per_partition") || "$UTIL_DIR/extract_reads_per_partition.pl";
-    $cmd = "$extract_reads --partitions_gff $partitions_file "
-        . " --coord_sorted_SAM $sam"
-        . " --parts_per_directory $parts_per_dir"
+    my $using_rust = ($extract_reads !~ /\.pl$/);
+    $cmd = ($using_rust && $sam =~ /\.bam$/)
+        ? "samtools view $sam | $extract_reads --partitions_gff $partitions_file --coord_sorted_SAM -"
+        : "$extract_reads --partitions_gff $partitions_file --coord_sorted_SAM $sam";
+    $cmd .= " --parts_per_directory $parts_per_dir"
         . " --min_reads_per_partition $min_reads_per_partition ";
 
     if ($SS_lib_type) {

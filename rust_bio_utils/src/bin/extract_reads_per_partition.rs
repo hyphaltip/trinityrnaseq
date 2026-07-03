@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 #[derive(Clone)]
 struct Partition {
@@ -78,11 +78,17 @@ fn main() {
 
     let scaff_to_partitions = parse_partitions(&partitions_file);
 
-    let sam_file = File::open(&alignments_sam).unwrap_or_else(|e| {
-        eprintln!("Error, cannot open file {}: {}", alignments_sam, e);
-        std::process::exit(1);
-    });
-    let sam_reader = BufReader::with_capacity(256 * 1024, sam_file);
+    // "-" reads from stdin, so a caller can pipe `samtools view` output in
+    // for BAM input instead of us having to link against htslib.
+    let sam_reader: Box<dyn BufRead> = if alignments_sam == "-" {
+        Box::new(BufReader::with_capacity(256 * 1024, io::stdin()))
+    } else {
+        let sam_file = File::open(&alignments_sam).unwrap_or_else(|e| {
+            eprintln!("Error, cannot open file {}: {}", alignments_sam, e);
+            std::process::exit(1);
+        });
+        Box::new(BufReader::with_capacity(256 * 1024, sam_file))
+    };
 
     let mut current_scaff = String::new();
     let mut ordered_partitions: Vec<Partition> = Vec::new();
