@@ -1,5 +1,6 @@
 
 # Trinity-v2.16.1_rust
+- bugfix: salmon_runner.pl always passed --minAssignedFrags to salmon, but that flag was dropped in salmon >=2.0 (the Rust rewrite), causing every genome-guided assembly partition's expression-filtering/supertranscript-polishing salmon quant call to fail; every failure silently fell back to unfiltered output or, in the polishing stage, produced no output at all, so a Trinity_GG run against salmon >=2.0 silently emitted 0 transcripts and ran ~3x slower burning time on doomed salmon invocations. salmon_runner.pl now detects the salmon major version and only passes --minAssignedFrags to the <2.0 line it was written against
 - optional Rust-accelerated drop-in replacements for the hottest steps of RNA-Seq-guided assembly prep (read-coordinate extraction, fragment pairing, coverage/partitioning, Jaccard pair-support scanning); each falls back to the existing Perl implementation automatically if the Rust binary isn't built, and can be forced off via TRINITY_NO_RUST for testing/benchmarking
 - sam_to_read_coords (Rust) now parses BAM natively (BGZF/gzip magic-byte detection, direct header + alignment decoding via flate2), so it no longer requires a pre-conversion to SAM text
 - bugfix: SAM_to_frag_coords.pl wasn't piping samtools view output into the Rust sam_to_read_coords command, so BAM input was fed through incorrectly
