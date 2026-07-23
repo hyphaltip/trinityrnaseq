@@ -10,6 +10,7 @@ use File::Basename;
 use File::Spec;
 use FindBin;
 use Getopt::Long qw(:config no_ignore_case bundling);
+use List::Util qw(min);
 use lib("$FindBin::Bin/../../PerlLib");
 use Thread_helper;
 use Cwd;
@@ -103,29 +104,28 @@ my $UTIL_DIR = "$FindBin::RealBin/";
 
 main: {
 
+	## Shard the (indexed, coordinate-sorted) input by contig/scaffold so that the
+    ## SAM_to_frag_coords -> fragment_coverage_writer -> define_coverage_partitions ->
+    ## extract_reads_per_partition chain below runs N-wide instead of as a single whole-genome
+    ## pass. Each of those tools already resets its internal state at scaffold-name boundaries
+    ## (confirmed by reading rust_bio_utils sources), so contig shards can be processed fully
+    ## independently and their outputs (already namespaced by scaffold/partition file) require
+    ## no merge step beyond the existing "find Dir_*" glob done by the caller.
+    my @shard_bams = &compute_contig_shard_bams($SAM_file, $CPU);
+
 	my @sam_info;
 
-	if ($SS_lib_type) {
-        my $sam_basename = basename($SAM_file);
-		my ($plus_strand_sam, $minus_strand_sam) = ("$sam_basename.+.sam", "$sam_basename.-.sam");
-		if (-s $plus_strand_sam && $minus_strand_sam) {
-			print STDERR "-strand partitioned SAM files already exist, so using them instead of re-creating them.\n";
+	foreach my $shard_bam (@shard_bams) {
+
+		if ($SS_lib_type) {
+			my ($plus_strand_sam, $minus_strand_sam) = &strand_separate($shard_bam, $SS_lib_type);
+			push (@sam_info, [$plus_strand_sam, '+'], [$minus_strand_sam, '-']);
 		}
 		else {
-			my $cmd = "$UTIL_DIR/SAM_strand_separator.pl $SAM_file $SS_lib_type";
-			&process_cmd($cmd);
+			push (@sam_info, [$shard_bam, '+']);
 		}
+	}
 
-		push (@sam_info, [$plus_strand_sam, '+'], [$minus_strand_sam, '-']);
-	}
-	else {
-        if (! -e  basename($SAM_file) ) {     #cwd() ne dirname(File::Spec->rel2abs($SAM_file))) {
-            &process_cmd("$SYMLINK $SAM_file " . basename($SAM_file));
-        }
-        $SAM_file = basename($SAM_file);
-		push (@sam_info, [$SAM_file, '+']);
-	}
-    
 
     my $thread_helper = new Thread_helper($CPU);
     
@@ -169,6 +169,110 @@ sub find_rust_binary {
     my $rust_dir = "$FindBin::RealBin/../../rust_bio_utils/target/release";
     my $path = "$rust_dir/$name";
     return (-x $path) ? $path : undef;
+}
+
+
+####
+# Splits an indexed, coordinate-sorted BAM into up to $num_shards sub-BAMs, each holding a
+# disjoint set of whole contigs/scaffolds, balanced by mapped-read count (greedy longest-
+# processing-time bin packing via `samtools idxstats`). Falls back to returning the input
+# unchanged (single "shard") when it isn't an indexable BAM, or there's nothing to gain from
+# sharding (CPU <= 1, or only one contig with mapped reads).
+sub compute_contig_shard_bams {
+    my ($bam_file, $num_shards) = @_;
+
+    my $bam_basename = basename($bam_file);
+
+    unless (-e $bam_basename) {
+        &process_cmd("$SYMLINK $bam_file $bam_basename");
+        if (-s "$bam_file.bai" && ! -e "$bam_basename.bai") {
+            &process_cmd("$SYMLINK $bam_file.bai $bam_basename.bai");
+        }
+    }
+    $bam_file = $bam_basename;
+
+    unless ($bam_file =~ /\.bam$/ && -s $bam_file && $num_shards > 1) {
+        # not an indexable BAM, or sharding wouldn't help: process as a single whole-file unit
+        return ($bam_file);
+    }
+
+    unless (-s "$bam_file.bai" || -s "$bam_file.csi") {
+        &process_cmd("samtools index $bam_file");
+    }
+
+    my @contigs; # [ name, length, mapped_read_count ]
+    open (my $fh, "samtools idxstats $bam_file |") or die "Error, cannot run samtools idxstats on $bam_file: $!";
+    while (<$fh>) {
+        chomp;
+        my ($name, $len, $mapped, $unmapped) = split(/\t/);
+        next if (!defined($name) || $name eq '*');
+        next unless ($mapped && $mapped > 0);
+        push (@contigs, [$name, $len, $mapped]);
+    }
+    close $fh;
+
+    if (scalar(@contigs) <= 1) {
+        # nothing to gain from contig-sharding a single-scaffold genome
+        return ($bam_file);
+    }
+
+    # greedy LPT bin-packing: sort contigs by mapped-read count descending, always add the next
+    # contig to the currently-lightest bucket, so the N shards finish in roughly the same time.
+    @contigs = sort { $b->[2] <=> $a->[2] } @contigs;
+    my $n = min($num_shards, scalar(@contigs));
+    my @buckets = map { { load => 0, contigs => [] } } (1..$n);
+    foreach my $contig (@contigs) {
+        @buckets = sort { $a->{load} <=> $b->{load} } @buckets;
+        $buckets[0]->{load} += $contig->[2];
+        push (@{$buckets[0]->{contigs}}, $contig);
+    }
+
+    my @shard_bams;
+    for (my $i = 0; $i < scalar(@buckets); $i++) {
+        my $bucket = $buckets[$i];
+        next unless (scalar(@{$bucket->{contigs}}));
+
+        my $shard_bed = "$bam_file.shard_$i.bed";
+        my $shard_bam = "$bam_file.shard_$i.bam";
+
+        unless (-s "$shard_bam.ok") {
+            open (my $bed_fh, ">$shard_bed") or die "Error, cannot write $shard_bed: $!";
+            foreach my $contig (@{$bucket->{contigs}}) {
+                my ($name, $len, $mapped) = @$contig;
+                print $bed_fh join("\t", $name, 0, $len) . "\n";
+            }
+            close $bed_fh;
+
+            &process_cmd("samtools view -b -L $shard_bed $bam_file > $shard_bam");
+            &process_cmd("samtools index $shard_bam");
+            &process_cmd("touch $shard_bam.ok");
+        }
+
+        push (@shard_bams, $shard_bam);
+    }
+
+    return @shard_bams;
+}
+
+
+####
+# Strand-separates a single shard (BAM or SAM), naming outputs after the shard so that
+# multiple shards running concurrently never collide on the same plus/minus filenames.
+sub strand_separate {
+    my ($shard_file, $ss_lib_type) = @_;
+
+    my $shard_basename = basename($shard_file);
+    my ($plus_strand_sam, $minus_strand_sam) = ("$shard_basename.+.sam", "$shard_basename.-.sam");
+
+    if (-s $plus_strand_sam && -s $minus_strand_sam) {
+        print STDERR "-strand partitioned SAM files already exist for $shard_file, so using them instead of re-creating them.\n";
+    }
+    else {
+        my $cmd = "$UTIL_DIR/SAM_strand_separator.pl $shard_file $ss_lib_type";
+        &process_cmd($cmd);
+    }
+
+    return ($plus_strand_sam, $minus_strand_sam);
 }
 
 

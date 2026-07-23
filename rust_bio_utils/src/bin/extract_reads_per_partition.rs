@@ -277,8 +277,10 @@ fn main() {
     }
 
     let _ = track_writer.flush();
-    let _ = fs::remove_file(&part_file).ok();
-    let _ = fs::remove_file(&sam_part_file).ok();
+    if read_counter < min_reads_per_partition {
+        let _ = fs::remove_file(&part_file);
+        let _ = fs::remove_file(&sam_part_file);
+    }
 
     if let Some(ofh) = ofh.take() {
         let _ = ofh.into_inner();

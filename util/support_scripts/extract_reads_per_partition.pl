@@ -239,9 +239,13 @@ main: {
         
 	}
 	close $track_fh;
-	
+
 	close $ofh if $ofh;
 	close $sam_ofh if $sam_ofh;
+
+	if ($read_counter < $MIN_READS_PER_PARTITION) {
+		unlink($part_file, $sam_part_file);
+	}
 
 	exit(0);
 }
