@@ -2599,13 +2599,18 @@ sub maybe_setup_bfly_cds {
         # JDK's default base archive, so it must run with base sharing enabled - it errors
         # out ("unsupported when base CDS archive is not loaded") if combined with
         # -Xshare:off. Leave default sharing (-Xshare:auto) in effect during training.
-        my $train_cmd = "$first_cmd -XX:ArchiveClassesAtExit=$tmp_archive > /dev/null 2>&1";
+        # NOTE: JVM flags only take effect if they appear before "-jar <jarfile>" on the
+        # command line - anything after "-jar" is passed to Butterfly's own main() as a
+        # program argument instead of being read by the JVM. So this must be spliced in
+        # before "-jar", not appended to the end of $first_cmd.
+        my $train_cmd = $first_cmd;
+        unless ($train_cmd =~ s/ -jar / -XX:ArchiveClassesAtExit='$tmp_archive' -jar /) {
+            return;
+        }
+        $train_cmd .= " > /dev/null 2>&1";
         my $ret = system($train_cmd);
 
-        if ($ret == 0 && -s $tmp_archive) {
-            unless (rename($tmp_archive, $bfly_cds_archive)) {
-                unlink($tmp_archive);
-            }
+        if ($ret == 0 && -s $tmp_archive && rename($tmp_archive, $bfly_cds_archive)) {
             print STDERR "-created butterfly CDS archive: $bfly_cds_archive\n" if $VERBOSE;
         }
         else {
@@ -2628,10 +2633,17 @@ sub maybe_setup_bfly_cds {
         # and leave the original (CDS-flag-free) $cmds_file exactly as it was.
         my $tmp_cmds_file = "$cmds_file.cds_tmp.$$";
         open (my $ofh, ">$tmp_cmds_file") or return;
-        foreach my $line (@lines) {
+        foreach my $orig_line (@lines) {
+            my $line = $orig_line;
             chomp $line;
             next unless $line;
-            print $ofh "$line -Xshare:auto -XX:SharedArchiveFile=$bfly_cds_archive\n" or do {
+            # As above: these JVM flags must precede "-jar", not trail the command.
+            unless ($line =~ s/ -jar / -Xshare:auto -XX:SharedArchiveFile='$bfly_cds_archive' -jar /) {
+                close $ofh;
+                unlink $tmp_cmds_file;
+                return;
+            }
+            print $ofh "$line\n" or do {
                 close $ofh;
                 unlink $tmp_cmds_file;
                 return;
