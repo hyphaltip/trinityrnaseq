@@ -127,6 +127,10 @@ my $mpiexec = "mpiexec";
 my $bflyCPU;
 my $bflyCalculateCPU = 0;
 my $bflyGCThreads = 2;
+my $bflyGCType = "serial";  # serial|parallel|g1 - serial avoids G1's region-setup cost on the mostly-tiny per-component heaps butterfly launches thousands of times
+my $bflyTieredStopAtLevel = 1;  # cap JIT to C1-only (0=off,1=C1 only); short-lived butterfly JVMs rarely run long enough to recoup C2 warm-up cost
+my $NO_BFLY_CDS = 0;        # set to disable Class Data Sharing archive creation/use for butterfly launches
+my $bfly_cds_archive;       # path to CDS archive; auto-generated in the output dir if CDS is enabled and not explicitly provided
 
 my $long_reads = "";
 my $LONG_READS_MODE = 0;
@@ -351,7 +355,17 @@ my $full_usage = qq^
 #  --no_distributed_trinity_exec   :do not run Trinity phase 2 (assembly of partitioned reads), and stop after generating command list.
 #
 #  --workdir <string>              :where Trinity phase-2 assembly computation takes place (defaults to --output setting).
-#                                  (can set this to a node-local drive or RAM disk)     
+#                                  (can set this to a node-local drive or RAM disk)
+#  --no_auto_workdir_tmpdir        :Trinity phase-2 assembly (Inchworm/Chrysalis/Butterfly per
+#                                   partition/component) creates and tears down many small working
+#                                   directories - potentially tens of thousands of them in
+#                                   genome-guided mode. If --workdir isn't given explicitly and
+#                                   \$TMPDIR is set to an existing, writable directory, it's used as
+#                                   the workdir by default so that churn lands on (usually
+#                                   node-local, fast) \$TMPDIR instead of the (often shared,
+#                                   network) filesystem holding --output. Pass this flag to disable
+#                                   that default and fall back to using --output, e.g. if \$TMPDIR
+#                                   points somewhere unsuitable (too small, not actually local).
 #
 ####################################################
 # Inchworm and K-mer counting-related options: #####
@@ -432,7 +446,23 @@ my $full_usage = qq^
 #                                   recursive graph traversal, independent of init heap.
 #  --bflyGCThreads <int>           :threads for garbage collection
 #                                   (default: $bflyGCThreads))
-#  --bflyCPU <int>                 :CPUs to use (default will be normal 
+#  --bflyGCType <string>           :garbage collector for butterfly: serial|parallel|g1
+#                                   (default: $bflyGCType); serial avoids G1's per-JVM
+#                                   region-setup cost across the many short-lived
+#                                   per-component butterfly launches.
+#  --bflyTieredStopAtLevel <int>   :cap JIT compilation tier for butterfly (0=interpreter
+#                                   only, 1=C1 only, 4=full tiered/default JVM behavior)
+#                                   (default: $bflyTieredStopAtLevel); short-lived butterfly
+#                                   JVMs rarely run long enough to recoup C2 warm-up cost.
+#  --no_bfly_cds                   :disable Class Data Sharing (CDS) archive creation/use
+#                                   for butterfly launches (see --bfly_cds_archive)
+#  --bfly_cds_archive <string>     :path to a CDS archive (.jsa) for butterfly launches.
+#                                   If CDS is enabled (default) and no archive is given,
+#                                   one is auto-generated in the output directory from the
+#                                   first butterfly component, then reused for the rest -
+#                                   this amortizes JVM class-loading/verification cost
+#                                   across the thousands of per-component butterfly launches.
+#  --bflyCPU <int>                 :CPUs to use (default will be normal
 #                                   number of CPUs; e.g., $CPU)
 #  --bflyCalculateCPU              :Calculate CPUs based on 80% of max_memory
 #                                   divided by maxbflyHeapSpaceMax
@@ -650,6 +680,7 @@ my $NO_VERSION_CHECK = 0;
 my $samples_file = "";
 
 my $WORKDIR;
+my $NO_AUTO_WORKDIR_TMPDIR = 0;  # set to disable the $TMPDIR auto-workdir default below
 
 my $NO_CHECK_COORDSORTED_BAM = 0;
 
@@ -687,6 +718,7 @@ my $ALREADY_SALMON_FILTERED = 0;
     
     "output=s" => \$output_directory,
     "workdir=s" => \$WORKDIR,
+    "no_auto_workdir_tmpdir" => \$NO_AUTO_WORKDIR_TMPDIR,
     
     "min_contig_length=i" => \$min_contig_length,
 
@@ -719,6 +751,10 @@ my $ALREADY_SALMON_FILTERED = 0;
     'bflyHeapSpaceInit=s'   => \$bflyHeapSpaceInit,
     'bflyStackSpace=s'      => \$bflyStackSpace,
     'bflyGCThreads=i'       => \$bflyGCThreads,
+    'bflyGCType=s'          => \$bflyGCType,
+    'bflyTieredStopAtLevel=i' => \$bflyTieredStopAtLevel,
+    'no_bfly_cds'           => \$NO_BFLY_CDS,
+    'bfly_cds_archive=s'    => \$bfly_cds_archive,
     'bflyCPU=i'             => \$bflyCPU,
     'bflyCalculateCPU'      => \$bflyCalculateCPU,
     'bfly_jar=s' => \$BFLY_JAR,
@@ -860,6 +896,10 @@ bfly_opts
 bflyHeapSpaceMax
 bflyHeapSpaceInit
 bflyGCThreads
+bflyGCType
+bflyTieredStopAtLevel
+no_bfly_cds
+bfly_cds_archive
 bflyCPU
 bflyCalculateCPU
 bfly_jar
@@ -908,6 +948,7 @@ bypass_java_version_check
 ananas_dir
 samples_file
 workdir
+no_auto_workdir_tmpdir
 stomp_snps
 FORCE
 include_supertranscripts
@@ -1010,6 +1051,25 @@ $output_directory = &create_full_path($output_directory, 0);
 
 if ($WORKDIR) {
     $WORKDIR = &create_full_path($WORKDIR, 0);
+}
+elsif (! $NO_AUTO_WORKDIR_TMPDIR && $ENV{TMPDIR} && -d $ENV{TMPDIR} && -w $ENV{TMPDIR}) {
+    # Phase-2 assembly (Inchworm/Chrysalis/Butterfly) creates and tears down a working
+    # directory per partition/component - many thousands of them in genome-guided mode.
+    # Default that churn onto $TMPDIR (typically node-local fast storage set up by the job
+    # scheduler) instead of the filesystem holding --output (often a shared/network mount,
+    # where that many small mkdir/create/unlink cycles can become a real bottleneck).
+    # Only kicks in when the user hasn't set --workdir themselves; --no_auto_workdir_tmpdir
+    # disables it and restores the prior default of using --output for everything.
+    # basename must contain 'trinity' - see the safety check below that guards
+    # auto-deletion, so we can't hand back $TMPDIR verbatim. Also make it unique per
+    # process (SLURM_JOB_ID, when available, groups a job's parent + all its per-partition
+    # children under one tag; $$ guarantees no collision regardless - important because
+    # $TMPDIR itself may not be job-private, e.g. it's left at the shared node-wide default
+    # of /tmp, in which case two different jobs (or even two runs by different users) on
+    # the same node would otherwise pick the identical directory and stomp on each other).
+    my $workdir_tag = ($ENV{SLURM_JOB_ID} ? "$ENV{SLURM_JOB_ID}." : "") . $$;
+    $WORKDIR = &create_full_path("$ENV{TMPDIR}/trinity_workdir.$workdir_tag", 0);
+    print STDERR "-no --workdir specified; defaulting phase-2 assembly workdir to \$TMPDIR ($WORKDIR) to reduce filesystem churn on the --output filesystem. Override with --workdir <dir>, or disable with --no_auto_workdir_tmpdir.\n";
 }
 else {
     $WORKDIR = $output_directory;
@@ -1249,6 +1309,31 @@ if (defined($bflyGCThreads) && $bflyGCThreads > 32) {
     die "Error, you probably want fewer than $bflyGCThreads java garbage collection threads. Try a number less than 32.";
 }
 
+my $bfly_gc_jvm_opt;
+if ("$bfly_opts $JAVA_OPTS" =~ /-XX:\+Use\w*GC/) {
+    # user already selected a collector explicitly (via --bfly_opts/--java_opts); forcing
+    # another -XX:+Use*GC alongside it is a fatal "multiple garbage collectors selected"
+    # JVM error, not a silently-overridden setting, so defer to theirs entirely.
+    $bfly_gc_jvm_opt = "";
+}
+elsif ($bflyGCType eq "serial") {
+    $bfly_gc_jvm_opt = "-XX:+UseSerialGC";
+}
+elsif ($bflyGCType eq "parallel") {
+    $bfly_gc_jvm_opt = "-XX:+UseParallelGC";
+}
+elsif ($bflyGCType eq "g1") {
+    $bfly_gc_jvm_opt = "-XX:+UseG1GC";
+}
+else {
+    die "Error, --bflyGCType must be one of: serial, parallel, g1 (got: $bflyGCType)\n";
+}
+
+my $bfly_tiered_jvm_opt = "";
+if (defined($bflyTieredStopAtLevel) && $bflyTieredStopAtLevel >= 0) {
+    $bfly_tiered_jvm_opt = "-XX:TieredStopAtLevel=$bflyTieredStopAtLevel";
+}
+
 
 if ($genome_guided_bam) {
     ## genome-guided mode.
@@ -1389,7 +1474,17 @@ main: {
 
     print STDERR "-changing dir to output dir: $output_directory\n" if $VERBOSE;
     chdir ($output_directory) or die "Error, cannot cd to $output_directory";
-    
+
+    # Establish one butterfly CDS archive path for the whole run (top-level invocations
+    # only - a --trinity_complete child inherits its parent's setting explicitly, see
+    # write_trinity_partitioned_cmds()). This lets every butterfly launch across the run,
+    # including ones split across many per-partition child Trinity processes in
+    # genome-guided mode, share and reuse the same archive rather than each child training
+    # its own for no benefit. See maybe_setup_bfly_cds().
+    unless ($NO_BFLY_CDS || $TRINITY_COMPLETE_FLAG || $bfly_cds_archive) {
+        $bfly_cds_archive = "$output_directory/butterfly_cds.jsa";
+    }
+
     collectl_start() unless ($TRINITY_COMPLETE_FLAG || $FULL_CLEANUP);
     &perfmon_start() unless ($TRINITY_COMPLETE_FLAG || $FULL_CLEANUP);
     
@@ -1934,6 +2029,8 @@ sub run_Trinity {
             . "---------------------------------------------------------------\n\n" if $VERBOSE;
         
                 
+        &maybe_setup_bfly_cds($butterfly_cmds);
+
         my $pipeliner = new Pipeliner(-verbose => ($TRINITY_COMPLETE_FLAG) ? $VERBOSE : max(1, $VERBOSE));
         my $cmd = "$PARAFLY -c $butterfly_cmds -shuffle -CPU $bflyCPU -failed_cmds failed_butterfly_commands.$$.txt ";  # shuffle them since the first ones are usually the longest-running ones.
         if ($VERBOSE) { $cmd .= " -v "; }
@@ -2376,11 +2473,16 @@ sub run_chrysalis {
                 
 
                 my $bfly_cmd = "java -Xmx$bflyHeapSpaceMax -Xms$bflyHeapSpaceInit -Xss$bflyStackSpace $JAVA_OPTS ";
-        
-                if (defined($bflyGCThreads)) {
+
+                $bfly_cmd .= " $bfly_gc_jvm_opt ";
+                if (defined($bflyGCThreads) && $bflyGCType ne "serial") {
+                    # SerialGC doesn't use worker/GC threads, so this flag is a no-op (and noisy) under it.
                     $bfly_cmd .= " -XX:ParallelGCThreads=$bflyGCThreads ";
                 }
-                
+                if ($bfly_tiered_jvm_opt) {
+                    $bfly_cmd .= " $bfly_tiered_jvm_opt ";
+                }
+
                 $bfly_cmd .= " -jar $BFLY_JAR -N 100000 -L $min_contig_length -F $group_pairs_distance -C $base_filename.graph ";
                 
                 if ($bfly_opts) {
@@ -2447,6 +2549,101 @@ sub run_chrysalis {
     return($butterfly_cmds);
         
 }  ## end of run_chrysalis()
+
+
+####
+# Amortize butterfly's per-JVM class-loading/verification cost across the many
+# (often thousands, and in genome-guided mode, tens of thousands split across
+# per-partition child Trinity processes) butterfly launches by sharing one
+# Class Data Sharing (CDS) archive across them.
+#
+# $bfly_cds_archive is a single path shared by the whole run: for a plain
+# (non genome-guided) run it's set once here at the top level; for
+# genome-guided runs it's set once at the top level and forwarded to every
+# per-partition child "Trinity --single ... --trinity_complete" invocation
+# via @ORIG_ARGS, so all partitions build/reuse the *same* archive instead of
+# each training its own (which, given most partitions only run one or two
+# butterfly commands, would provide no reuse benefit at all).
+#
+# The archive is generated lazily, from a real butterfly invocation (the
+# first command in this batch), the first time any process observes it
+# missing. Concurrent partitions racing to create it is harmless: each writes
+# to its own uniquely-named temp file and atomically renames it into place,
+# so the last writer simply wins and no reader ever sees a partial archive.
+# If archive creation fails (e.g. -XX:ArchiveClassesAtExit is unsupported on
+# an older JDK), a sentinel file is written so later partitions don't keep
+# retrying a doomed training run.
+sub maybe_setup_bfly_cds {
+    my ($cmds_file) = @_;
+
+    return unless ($bfly_cds_archive && ! $NO_BFLY_CDS);
+
+    my $unsupported_marker = "$bfly_cds_archive.unsupported";
+    return if (-e $unsupported_marker);
+
+    unless (-s $bfly_cds_archive) {
+
+        open (my $fh, $cmds_file) or return;
+        my $first_cmd = <$fh>;
+        close $fh;
+        return unless $first_cmd;
+        chomp $first_cmd;
+
+        my $tmp_archive = "$bfly_cds_archive.tmp.$$";
+        # NOTE: -XX:ArchiveClassesAtExit (dynamic CDS) layers app classes on top of the
+        # JDK's default base archive, so it must run with base sharing enabled - it errors
+        # out ("unsupported when base CDS archive is not loaded") if combined with
+        # -Xshare:off. Leave default sharing (-Xshare:auto) in effect during training.
+        my $train_cmd = "$first_cmd -XX:ArchiveClassesAtExit=$tmp_archive > /dev/null 2>&1";
+        my $ret = system($train_cmd);
+
+        if ($ret == 0 && -s $tmp_archive) {
+            unless (rename($tmp_archive, $bfly_cds_archive)) {
+                unlink($tmp_archive);
+            }
+            print STDERR "-created butterfly CDS archive: $bfly_cds_archive\n" if $VERBOSE;
+        }
+        else {
+            unlink($tmp_archive) if (-e $tmp_archive);
+            open (my $ofh, ">$unsupported_marker") or return;
+            print $ofh "butterfly CDS archive creation failed or unsupported on this JVM. cmd was:\n$train_cmd\n";
+            close $ofh;
+            return;
+        }
+    }
+
+    if (-s $bfly_cds_archive) {
+        open (my $fh, $cmds_file) or return;
+        my @lines = <$fh>;
+        close $fh;
+
+        # write-to-temp-then-rename: a write/close failure partway through (e.g. an NFS
+        # error, which surfaces at close() rather than at print()) must not leave
+        # $cmds_file truncated - PARAFLY is about to consume it. On any failure, bail out
+        # and leave the original (CDS-flag-free) $cmds_file exactly as it was.
+        my $tmp_cmds_file = "$cmds_file.cds_tmp.$$";
+        open (my $ofh, ">$tmp_cmds_file") or return;
+        foreach my $line (@lines) {
+            chomp $line;
+            next unless $line;
+            print $ofh "$line -Xshare:auto -XX:SharedArchiveFile=$bfly_cds_archive\n" or do {
+                close $ofh;
+                unlink $tmp_cmds_file;
+                return;
+            };
+        }
+        unless (close $ofh) {
+            unlink $tmp_cmds_file;
+            return;
+        }
+        unless (rename($tmp_cmds_file, $cmds_file)) {
+            unlink $tmp_cmds_file;
+            return;
+        }
+    }
+
+    return;
+}
 
 
 ####
@@ -3703,16 +3900,16 @@ sub write_trinity_partitioned_cmds {
         my $arg = shift @potential_args;
         
         # single value options that aren't needed:
-        if ($arg =~ /run_as_paired|normalize_by_read_set|trimmomatic|normalize_reads|prep|recurs|clean|monitoring|in_simg_mode/) {
+        if ($arg =~ /run_as_paired|normalize_by_read_set|trimmomatic|normalize_reads|prep|recurs|clean|monitoring|in_simg_mode|no_bfly_cds/) {
             next;
         }
-        
+
         # value specified options that aren't needed
         if ($arg =~ /seqType|left|right|single|genome|SS_lib_type|quality_trimming|output|normalize_max_read_cov|grid_conf|max_mem|grid|long_reads|inchworm_cpu|samples_file|monitor_sec/
             ||
             # more precise identification of parameter
-            $arg =~ /^(--CPU)$/
-            
+            $arg =~ /^(--CPU|--bfly_cds_archive)$/
+
             ) {
             # skipping these, already represented by opt configuration above.
             my $val = shift @potential_args;
@@ -3729,7 +3926,20 @@ sub write_trinity_partitioned_cmds {
             $cmd .= " $arg ";
         }
     }
-    
+
+    # Forward the shared butterfly CDS archive path explicitly rather than via the
+    # generic @ORIG_ARGS token scan above: that scan tests option *values* (not just
+    # flag names) against substring patterns like "genome"/"output", and a real output
+    # path (e.g. one under a directory named ".../genome_annotation_training/...")
+    # can innocently contain one of those substrings and get mis-parsed as an unrelated
+    # option. Explicit and unambiguous is safer here. See maybe_setup_bfly_cds().
+    if ($bfly_cds_archive) {
+        $cmd .= " --bfly_cds_archive $bfly_cds_archive ";
+    }
+    elsif ($NO_BFLY_CDS) {
+        $cmd .= " --no_bfly_cds ";
+    }
+
     $cmd .= " > $cmds_file";
     
     &process_cmd($cmd) unless (-e "$cmds_file.ok");
