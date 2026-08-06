@@ -1054,7 +1054,7 @@ if ( $ENV{SLURM_JOB_ID} ) {
 }
 if ($WORKDIR) {
     if ( basename($WORKDIR) !~ /trinity/i ) {
-	my $tag = (exists $ENV{SLURM_JOB_ID} ? "$ENV{SLURM_JOB_ID}." : "") . $$;
+	my $tag = ($ENV{SLURM_JOB_ID} ? $ENV{SLURM_JOB_ID} : $$);
 	$WORKDIR .= "/trinity_workdir.$tag";
     }
     $WORKDIR = &create_full_path($WORKDIR, 0);
@@ -1073,7 +1073,7 @@ if ($WORKDIR) {
     # $TMPDIR itself may not be job-private, e.g. it's left at the shared node-wide default
     # of /tmp, in which case two different jobs (or even two runs by different users) on
     # the same node would otherwise pick the identical directory and stomp on each other).
-    my $workdir_tag = ($ENV{SLURM_JOB_ID} ? "$ENV{SLURM_JOB_ID}." : "") . $$;
+    my $workdir_tag = ($ENV{SLURM_JOB_ID} ? $ENV{SLURM_JOB_ID} : $$);
     $WORKDIR = &create_full_path("$ENV{TMPDIR}/trinity_workdir.$workdir_tag", 0);
     print STDERR "-no --workdir specified; defaulting phase-2 assembly workdir to \$TMPDIR ($WORKDIR) to reduce filesystem churn on the --output filesystem. Override with --workdir <dir>, or disable with --no_auto_workdir_tmpdir.\n";
 }
@@ -1583,17 +1583,14 @@ main: {
                 chdir($start_dir) or die "Error, cannot cd to start dir";
                 if ($MKDIR_PHASE1_OUTDIR_FLAG && basename($TRINITY_PHASE1_OUTDIR) =~ /trinity/i) { # ensure outdirectory as trinity in the name, just to be sure we dont delete something non-trinity related!!!
                     system("rm -rf $TRINITY_PHASE1_OUTDIR");
-                }
-                else {
+                } else {
                     print STDERR "-cannot remove output directory: $TRINITY_PHASE1_OUTDIR, either not created in this execution (resume mode) or doesnt include trinity in the directory name";
                 }
             }
         }
         
         &process_cmd("$UTILDIR/support_scripts/get_Trinity_gene_to_trans_map.pl $trinity_GG_fasta_file > $trinity_GG_fasta_file.gene_trans_map");
-        
         print STDERR "\n\nFinished. See $trinity_GG_fasta_file for reconstructed transcripts\n\n";
-        
         exit(0);
     }
     
