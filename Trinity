@@ -8,6 +8,7 @@ no strict qw(subs refs);
 use FindBin;
 use lib ("$FindBin::RealBin/PerlLib");
 use File::Basename;
+use File::Which qw(which);
 use Time::localtime;
 use Cwd;
 use Carp;
@@ -1033,8 +1034,8 @@ unless ($max_memory &&
 ## make sure properly installed
 {
     foreach my $trinity_tool ("ParaFly", "seqtk-trinity") {
-        my $loc = `sh -c "command -v $trinity_tool"`;
-        unless ($loc =~ /\w/) {
+        my $loc = which($trinity_tool);
+        unless ($loc) {
             die "\n\n\tError, cannot locate Trinity-specific tool: $trinity_tool in the PATH setting: $ENV{PATH},  be sure to install Trinity by running 'make' in the base installation directory\n\n";
         }
     }
@@ -1728,7 +1729,7 @@ sub run_Trinity {
                 if ($thr1->error() || $thr2->error()) {
                     die "Error prepping sequences.";
                 }
-                &process_cmd("touch left.fa.ok right.fa.ok");
+                &touch_checkpoint("left.fa.ok", "right.fa.ok");
                 
                 print("Done converting input files.") if $VERBOSE;
                 ## Calculate input file sizes for performance monitoring
@@ -1746,7 +1747,7 @@ sub run_Trinity {
                 unless (-s $trinity_target_fa == ((-s "left.fa") + (-s "right.fa"))) {
                     die "$trinity_target_fa is smaller (".(-s $trinity_target_fa)." bytes) than the combined size of left.fa and right.fa (".((-s "left.fa") + (-s "right.fa"))." bytes)\n";
                 }
-                &process_cmd("touch $trinity_target_fa.ok") unless (-e "$trinity_target_fa.ok");
+                &touch_checkpoint("$trinity_target_fa.ok") unless (-e "$trinity_target_fa.ok");
                 
                 # we keep if we have jaccard; delete later
                 unlink ("left.fa", "right.fa") unless $jaccard_clip; # no longer needed now that we have 'both.fa', which is needed by chrysalis
@@ -1769,7 +1770,7 @@ sub run_Trinity {
         elsif (@single_files) {
             unless (-s $trinity_target_fa && -e "single.fa.ok") {
                 &prep_seqs(\@single_files, $seqType, "single", $SS_lib_type);
-                &process_cmd("touch single.fa.ok");
+                &touch_checkpoint("single.fa.ok");
             }
             ## Calculate input file sizes for performance monitoring
             my $pm_temp = -s "single.fa";
@@ -1829,7 +1830,7 @@ sub run_Trinity {
             &process_cmd("cp $trinity_target_fa $trinity_target_fa_wLR");
             &process_cmd("cat $long_reads | sed 's/>/>LR\\\$\\\|/' >> $trinity_target_fa_wLR"); #  
             
-            &process_cmd("touch $trinity_target_fa_wLR.ok");
+            &touch_checkpoint("$trinity_target_fa_wLR.ok");
         
 
         }
@@ -1902,7 +1903,7 @@ sub run_Trinity {
             unless ($NO_CLEANUP) {
                 &process_cmd("rm -f @super_read_files");
             }
-            &process_cmd("touch $super_reads_checkpoint");
+            &touch_checkpoint("$super_reads_checkpoint");
         }
 
         #print "Chrys reads before: $chrysalis_reads_fa\n";
@@ -1936,7 +1937,7 @@ sub run_Trinity {
     $pm_inchworm_start = time();
     unless (-s $inchworm_file && -e $inchworm_finished_checkpoint_file) {
         &run_inchworm($inchworm_file, $inchworm_target_fa, $SS_lib_type, $kmer_method, $KMER_SIZE, 0);
-        &process_cmd("touch $inchworm_finished_checkpoint_file");
+        &touch_checkpoint("$inchworm_finished_checkpoint_file");
     }
     $pm_inchworm_end = time();
         
@@ -2162,7 +2163,7 @@ sub run_chrysalis {
                         }
                     }
                     close $ofh_LR;
-                    &process_cmd("touch $only_LR_fa_checkpoint");
+                    &touch_checkpoint("$only_LR_fa_checkpoint");
                 }
                 
             }
@@ -2714,7 +2715,7 @@ sub run_recursive_trinity {
         close $ofh if $ofh;
         close $ofh_read_filenames;
         
-        &process_cmd("touch $read_filenames_ok");
+        &touch_checkpoint("$read_filenames_ok");
     }
     
     
@@ -2726,7 +2727,7 @@ sub run_recursive_trinity {
         
     if (! -e "recursive_trinity.cmds.ok") {
         &write_trinity_partitioned_cmds($read_filenames, "recursive_trinity.cmds", "GENOME-FREE_MODE");
-        &process_cmd("touch recursive_trinity.cmds.ok");
+        &touch_checkpoint("recursive_trinity.cmds.ok");
         print STDERR "Done prepping partitioned cmds." if $VERBOSE;
     }
 
@@ -2782,7 +2783,9 @@ sub run_inchworm {
         close $ofh;
     }
     else {
-        $pm_read_count = `cat $read_count_file`;
+        open (my $rfh, "<", $read_count_file) or die "Error, cannot open file: $read_count_file, $!";
+        $pm_read_count = <$rfh>;
+        close $rfh;
         chomp $pm_read_count;
     }
     
@@ -3087,7 +3090,7 @@ sub prep_seqs {
         die $@;
     }
     else {
-        &process_cmd("touch $file_prefix.fa.ok"); # leave checkpoint
+        &touch_checkpoint("$file_prefix.fa.ok"); # leave checkpoint
     }
         
     return \@initial_files;
@@ -3138,7 +3141,20 @@ sub process_cmd {
     }
     
     print STDERR "CMD finished (" . ($end_time - $start_time) . " seconds)\n" if $VERBOSE;
-    
+
+    return;
+}
+
+
+####
+sub touch_checkpoint {
+    my (@files) = @_;
+
+    foreach my $file (@files) {
+        open(my $ofh, ">", $file) or confess "Error, cannot touch checkpoint file: $file, $!";
+        close $ofh;
+    }
+
     return;
 }
 
@@ -3209,7 +3225,7 @@ sub test_java_failure_capture {
         print "Running Java Tests\n";
     }
     
-    my $java_prog = `sh -c "command -v java"`;
+    my $java_prog = which("java");
     unless ($java_prog) {
         die "Error, cannot find 'java'.  Please be sure it is available within your \${PATH} setting and then try again.";
     }
@@ -3369,7 +3385,10 @@ sub perfmon_start {
     print FILE "===========\n";
     print FILE     "Trinity Version:      $VERSION\n";
     my $tempp="";
-    $tempp=`ldd $INCHWORM_DIR/inchworm 2>/dev/null | grep "libgomp"`;
+    my $ldd_output = `ldd $INCHWORM_DIR/inchworm 2>/dev/null`;
+    if ($ldd_output =~ /libgomp/) {
+        $tempp = "libgomp";
+    }
     if  ($tempp eq "") {
         print FILE "Compiler:             Intel\n";
     } else {
@@ -3402,7 +3421,11 @@ sub perfmon_end {
             print FILE "  Single.fasta  $pm_single_fa_size MByte\n";
         }
     }
-    $pm_inchworm_kmers = `cat $output_directory/inchworm.kmer_count`;
+    {
+        open (my $kfh, "<", "$output_directory/inchworm.kmer_count") or die "Error, cannot open file: $output_directory/inchworm.kmer_count, $!";
+        $pm_inchworm_kmers = <$kfh>;
+        close $kfh;
+    }
     print FILE "  Number of unique KMERs: $pm_inchworm_kmers";
     print FILE "  Number of reads:        $pm_read_count";
     print FILE " Output data\n";
@@ -3532,7 +3555,7 @@ sub run_trimmomatic_PE {
         &process_cmd("cat $trimmed_right_file_base.P.qtrim $trimmed_right_file_base.U.qtrim > $trimmed_right_fq");
     }
     
-    &process_cmd("touch $checkpoint");
+    &touch_checkpoint("$checkpoint");
     
     # compress the trimmomatic direct outputs to conserve space:
     &process_cmd("gzip $trimmed_left_file_base.P.qtrim $trimmed_left_file_base.U.qtrim $trimmed_right_file_base.P.qtrim $trimmed_right_file_base.U.qtrim &");
@@ -3568,7 +3591,7 @@ sub run_trimmomatic_SE {
     
     &process_cmd($cmd);
 
-    &process_cmd("touch $checkpoint");
+    &touch_checkpoint("$checkpoint");
     
     return($trimmed_fq);
 }
@@ -3687,7 +3710,7 @@ sub normalize {
 
         &process_cmd($cmd);
         
-        &process_cmd("touch $checkpoint");
+        &touch_checkpoint("$checkpoint");
     }
     
 
@@ -3726,7 +3749,7 @@ sub run_genome_guided_Trinity {
         my $normalized_cov_bam = "$output_directory/" . basename($genome_guided_bam) . ".norm_${normalize_max_read_cov}.bam";
         my $cmd = "$TRINITY_PLUGINS_DIR/bamsifter/bamsifter -c $normalize_max_read_cov -o $normalized_cov_bam --keep_secondary $genome_guided_bam"; 
         &process_cmd($cmd) if ! -e "$normalized_cov_bam.ok";
-        &process_cmd("touch $normalized_cov_bam.ok") if ! -e "$normalized_cov_bam.ok";
+        &touch_checkpoint("$normalized_cov_bam.ok") if ! -e "$normalized_cov_bam.ok";
         
         $genome_guided_bam = $normalized_cov_bam;
     }
@@ -3796,13 +3819,13 @@ sub run_genome_guided_Trinity {
     }
     &process_cmd($cmd) unless (-e "partitions.ok");
 
-    &process_cmd("touch partitions.ok") unless (-e "partitions.ok");
+    &touch_checkpoint("partitions.ok") unless (-e "partitions.ok");
     
     ## generate list of the read files:
     $cmd = "find Dir_\* -name '*reads' > read_files.list";
     
     &process_cmd($cmd) unless (-s "read_files.list" && -e "read_files.list.ok");
-    &process_cmd("touch read_files.list.ok") unless (-e "read_files.list.ok"); # checkpoint
+    &touch_checkpoint("read_files.list.ok") unless (-e "read_files.list.ok"); # checkpoint
 
 
     if ($ANANAS_DIR) {
@@ -3814,7 +3837,7 @@ sub run_genome_guided_Trinity {
 
     unless (-e "trinity_GG.cmds.ok") {
         &write_trinity_partitioned_cmds("read_files.list", "trinity_GG.cmds", "GENOME_GUIDED_MODE");
-        &process_cmd("touch trinity_GG.cmds.ok");
+        &touch_checkpoint("trinity_GG.cmds.ok");
     }
     
     if ($NO_DISTRIBUTED_TRINITY_EXEC) {
@@ -3957,7 +3980,7 @@ sub write_trinity_partitioned_cmds {
     $cmd .= " > $cmds_file";
     
     &process_cmd($cmd) unless (-e "$cmds_file.ok");
-    &process_cmd("touch $cmds_file.ok") unless (-e "$cmds_file.ok");
+    &touch_checkpoint("$cmds_file.ok") unless (-e "$cmds_file.ok");
 
     
     return;
@@ -4081,7 +4104,7 @@ sub run_ANANAS {
         close $fh;
         close $ofh;
 
-        &process_cmd("touch $ananas_cmds_checkpoint");
+        &touch_checkpoint("$ananas_cmds_checkpoint");
     }
     
     if ($NO_DISTRIBUTED_TRINITY_EXEC) {
@@ -4144,7 +4167,7 @@ sub append_long_reads_to_iworm_contigs {
         }
         close $ofh;
     
-        &process_cmd("touch $long_reads_fa_checkpoint_file");
+        &touch_checkpoint("$long_reads_fa_checkpoint_file");
     }
     
     unless (-s $long_reads_fa) {
@@ -4160,7 +4183,7 @@ sub append_long_reads_to_iworm_contigs {
     my $LR_kmer_checkpoint_file = "$LR_kmer_abundances_file.ok";
     unless (-s $LR_kmer_abundances_file && -e $LR_kmer_checkpoint_file) {
         &process_cmd($cmd);
-        &process_cmd("touch $LR_kmer_checkpoint_file");
+        &touch_checkpoint("$LR_kmer_checkpoint_file");
     }
     
 
@@ -4209,7 +4232,7 @@ sub append_long_reads_to_iworm_contigs {
     close $ofh;
     
 
-    &process_cmd("touch $new_inchworm_checkpoint_file");
+    &touch_checkpoint("$new_inchworm_checkpoint_file");
     return($new_inchworm_file);
 }
 
@@ -4275,8 +4298,8 @@ sub check_required_3rd_party_tool_installations {
 
 
     # samtools
-    my $samtools_path = `sh -c "command -v samtools"`;
-    if ($samtools_path =~ /\w/) {
+    my $samtools_path = which("samtools");
+    if ($samtools_path) {
         print "Found samtools at: $samtools_path\n" if $VERBOSE;
     
         my $version_info = `samtools --version 2>&1`;
@@ -4292,8 +4315,8 @@ sub check_required_3rd_party_tool_installations {
     }
 
     # jellyfish
-    my $jellyfish_path = `sh -c "command -v jellyfish"`;
-    if ($jellyfish_path =~ /\w/) {
+    my $jellyfish_path = which("jellyfish");
+    if ($jellyfish_path) {
         print "Found jellyfish at: $jellyfish_path\n" if $VERBOSE;
 
         my $version_info = `jellyfish --version`;
@@ -4310,22 +4333,20 @@ sub check_required_3rd_party_tool_installations {
     ## bowtie2
     if (!$NO_BOWTIE) {
         ## be sure we can find 'bowtie', since we use it as part of the iworm pair scaffolding step
-        $bowtie2_path = `sh -c "command -v bowtie2"`;
-        $bowtie2_build_path = `sh -c "command -v bowtie2-build"`;
-        if ($bowtie2_path =~ /\w/ && $bowtie2_build_path =~ /\w/) {
-            chomp $bowtie2_path;
-            chomp $bowtie2_build_path;
+        $bowtie2_path = which("bowtie2");
+        $bowtie2_build_path = which("bowtie2-build");
+        if ($bowtie2_path && $bowtie2_build_path) {
             print "Paired mode requires bowtie2. Found bowtie2 at: $bowtie2_path\n and bowtie-build at $bowtie2_build_path\n\n" if $VERBOSE;
         }
         else {
-            die "Error, cannot find path to bowtie2 ($bowtie2_path) or bowtie2-build ($bowtie2_build_path), which is now needed as part of Chrysalis' read scaffolding step.  If you should choose to not run bowtie, include the --no_bowtie in your Trinity command.\n\n";
+            die "Error, cannot find path to bowtie2 (" . ($bowtie2_path // '') . ") or bowtie2-build (" . ($bowtie2_build_path // '') . "), which is now needed as part of Chrysalis' read scaffolding step.  If you should choose to not run bowtie, include the --no_bowtie in your Trinity command.\n\n";
         }
     }
 
     # salmon
     if (! $NO_SALMON) {
-        my $salmon_path = `sh -c "command -v salmon"`;
-        if ($salmon_path =~ /\w/) {
+        my $salmon_path = which("salmon");
+        if ($salmon_path) {
             print "Found salmon installed at $salmon_path\n" if $VERBOSE;
 
             my $version_info = `salmon --version 2>&1`;

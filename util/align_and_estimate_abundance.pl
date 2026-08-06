@@ -480,7 +480,7 @@ sub run_alignment_BASED_estimation {
                 print STDERR "WARNING - looks like the prep for $db_index_name was already started by another process.  Proceeding with caution.\n";
             }
             
-            &process_cmd("touch $db_index_name.started");
+            &touch_checkpoint("$db_index_name.started");
             
             &process_cmd($cmd);
             
@@ -509,7 +509,7 @@ sub run_alignment_BASED_estimation {
 
             unless (-e "$rsem_prefix.rsem.prepped.ok") {
                 
-                &process_cmd("touch $rsem_prefix.rsem.prepped.started");
+                &touch_checkpoint("$rsem_prefix.rsem.prepped.started");
                 
                 my $cmd = "rsem-prepare-reference "; #--no-bowtie"; # update for RSEM-2.15
                 
@@ -609,7 +609,7 @@ sub run_alignment_do_quant {
     
     &process_cmd($bowtie_cmd) unless (-s $bam_file && -e $bam_file_ok);
     
-    &process_cmd("touch $bam_file_ok") unless (-e $bam_file_ok);
+    &touch_checkpoint("$bam_file_ok") unless (-e $bam_file_ok);
     
         
     if ($est_method eq "RSEM") {
@@ -650,7 +650,7 @@ sub sort_bam_file {
         $cmd = "samtools index $sorted_bam_file.bam";
         &process_cmd($cmd);
         
-        &process_cmd("touch $sorted_bam_file.bam.ok");
+        &touch_checkpoint("$sorted_bam_file.bam.ok");
     }
 
     return;
@@ -707,7 +707,7 @@ sub run_RSEM {
     unless (-e "$output_prefix.isoforms.results.ok") {
         &process_cmd($cmd);
     }
-    &process_cmd("touch $output_prefix.isoforms.results.ok");
+    &touch_checkpoint("$output_prefix.isoforms.results.ok");
 
     return;
 }
@@ -728,7 +728,19 @@ sub process_cmd {
     if ($ret) {
         die "Error, cmd: $cmd died with ret: $ret";
     }
-    
+
+    return;
+}
+
+####
+sub touch_checkpoint {
+    my (@files) = @_;
+
+    foreach my $file (@files) {
+        open(my $ofh, ">", $file) or confess "Error, cannot touch checkpoint file: $file, $!";
+        close $ofh;
+    }
+
     return;
 }
 

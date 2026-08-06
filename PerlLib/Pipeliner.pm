@@ -175,23 +175,25 @@ sub run {
             
             my $ret = system($cmdstr);
             if ($ret) {
-                                
+
                 if (-e $tmp_stderr) {
-                    my $errmsg = `cat $tmp_stderr`;
+                    my $errmsg = "";
+                    if (open(my $efh, "<", $tmp_stderr)) {
+                        local $/;
+                        $errmsg = <$efh>;
+                        close $efh;
+                    }
                     if ($errmsg =~ /\w/) {
                         print STDERR "\n\nError encountered::  <!----\nCMD: $cmdstr\n\nErrmsg:\n$errmsg\n--->\n\n";
                     }
                     unlink($tmp_stderr);
                 }
-                                
+
                 confess "Error, cmd: $cmdstr died with ret $ret $!";
             }
             else {
-                `touch $checkpoint_file`;
-                if ($?) {
-                    
-                    confess "Error creating checkpoint file: $checkpoint_file";
-                }
+                open(my $ofh, ">", $checkpoint_file) or confess "Error creating checkpoint file: $checkpoint_file, $!";
+                close $ofh;
             }
 
             if (-e $tmp_stderr) {

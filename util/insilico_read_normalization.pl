@@ -8,6 +8,7 @@ no strict qw(subs refs);
 use FindBin;
 use lib ("$FindBin::RealBin/../PerlLib");
 use File::Basename;
+use File::Path qw(remove_tree);
 use Cwd;
 use Carp;
 use Getopt::Long qw(:config no_ignore_case pass_through);
@@ -455,7 +456,7 @@ main: {
     unless ($NO_CLEANUP) {
         if ($CREATED_TMP_DIR_HERE_FLAG) {
             print STDERR "-removing tmp dir $tmp_directory\n";
-            `rm -rf $tmp_directory`;
+            remove_tree($tmp_directory);
         }
     }
     
@@ -645,7 +646,7 @@ sub run_jellyfish {
         unlink($jelly_db);
             
         ## if got this far, consider jellyfish done.
-        &process_cmd("touch $jellyfish_checkpoint");
+        &touch_checkpoint($jellyfish_checkpoint);
         
     }
     
@@ -807,7 +808,19 @@ sub process_cmd {
         die "Error, cmd: $cmd died with ret $ret";
     }
     
-    print STDERR "CMD finished (" . ($end_time - $start_time) . " seconds)\n";    
+    print STDERR "CMD finished (" . ($end_time - $start_time) . " seconds)\n";
+
+    return;
+}
+
+####
+sub touch_checkpoint {
+    my (@files) = @_;
+
+    foreach my $file (@files) {
+        open(my $ofh, ">", $file) or confess "Error, cannot touch checkpoint file: $file, $!";
+        close $ofh;
+    }
 
     return;
 }
@@ -905,7 +918,7 @@ sub process_checkpoints {
     foreach my $checkpoint (@checkpoints) {
         my ($outfile, $checkpoint_file) = @$checkpoint;
         if (-s "$outfile" && ! -e $checkpoint_file) {
-            &process_cmd("touch $checkpoint_file");
+            &touch_checkpoint($checkpoint_file);
         }
     }
     

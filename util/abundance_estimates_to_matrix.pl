@@ -92,7 +92,9 @@ my @files;
 
 if ($quant_files) {
     # allow for a file listing the various files.
-    @files = `cat $quant_files`;
+    open (my $qfh, "<", $quant_files) or confess "Error, cannot open file: $quant_files, $!";
+    @files = <$qfh>;
+    close $qfh;
     chomp @files;
 }
 elsif (@ARGV) {
