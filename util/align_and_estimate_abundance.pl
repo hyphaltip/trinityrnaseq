@@ -6,6 +6,8 @@ use FindBin;
 
 use Cwd;
 use Carp;
+use File::Which qw(which);
+use File::Path qw(make_path);
 
 use Getopt::Long qw(:config no_ignore_case bundling pass_through);
 use Data::Dumper;
@@ -401,8 +403,8 @@ if ( $thread_count !~ /^\d+$/ ) {
     
         
     foreach my $tool (@tools) {
-        my $p = `sh -c "command -v $tool"`;
-        unless ($p =~ /\w/) {
+        my $p = which($tool);
+        unless ($p) {
             warn("ERROR, cannot find $tool in PATH setting: $ENV{PATH}\n\n");
             $missing = 1;
         }
@@ -561,7 +563,7 @@ sub run_alignment_do_quant {
     #####################
     
     unless (-d $output_dir) {
-        system("mkdir -p $output_dir");
+        make_path($output_dir);
     }
     chdir $output_dir or die "Error, cannot cd to output directory $output_dir";
     
