@@ -2,6 +2,7 @@
 
 use strict;
 use warnings;
+use File::Which qw(which);
 
 my $usage = "\n\n\tusage: $0 acc_list_file.txt target_db.fasta\n\n";
 
@@ -11,13 +12,14 @@ my $target_db = $ARGV[1] or die $usage;
 
 main: {
 
-    my $samtools = `sh -c "command -v samtools"`;
-    unless ($samtools =~ /\w/) {
+    my $samtools = which("samtools");
+    unless ($samtools) {
         die "Error, need samtools in your PATH setting.";
     }
-    chomp $samtools;
 
-    my @accs = `cat $acc_list_file`;
+    open (my $afh, "<", $acc_list_file) or die "Error, cannot open file: $acc_list_file, $!";
+    my @accs = <$afh>;
+    close $afh;
     chomp @accs;
     
     if (! -s "$target_db.fasta.fai") {
