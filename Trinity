@@ -1049,10 +1049,16 @@ if ($NO_SYMLINK_FLAG || $ENV{NO_SYMLINK}) {
 
 $output_directory = &create_full_path($output_directory, 0);
 
-if ($WORKDIR) {
-    $WORKDIR = &create_full_path($WORKDIR, 0);
+if ( $ENV{SLURM_JOB_ID} ) {
+   $ENV{SLURM_JOB_ID} =~ s/[^A-Za-z0-9_.]//g;
 }
-elsif (! $NO_AUTO_WORKDIR_TMPDIR && $ENV{TMPDIR} && -d $ENV{TMPDIR} && -w $ENV{TMPDIR}) {
+if ($WORKDIR) {
+    if ( basename($WORKDIR) !~ /trinity/i ) {
+	my $tag = (exists $ENV{SLURM_JOB_ID} ? "$ENV{SLURM_JOB_ID}." : "") . $$;
+	$WORKDIR .= "/trinity_workdir.$tag";
+    }
+    $WORKDIR = &create_full_path($WORKDIR, 0);
+} elsif (! $NO_AUTO_WORKDIR_TMPDIR && $ENV{TMPDIR} && -d $ENV{TMPDIR} && -w $ENV{TMPDIR}) {
     # Phase-2 assembly (Inchworm/Chrysalis/Butterfly) creates and tears down a working
     # directory per partition/component - many thousands of them in genome-guided mode.
     # Default that churn onto $TMPDIR (typically node-local fast storage set up by the job
@@ -1074,7 +1080,6 @@ elsif (! $NO_AUTO_WORKDIR_TMPDIR && $ENV{TMPDIR} && -d $ENV{TMPDIR} && -w $ENV{T
 else {
     $WORKDIR = $output_directory;
 }
-
 
 if ($singularity_img && ! $in_simg_mode) {
 
@@ -1383,7 +1388,7 @@ unless (basename($output_directory) =~ /trinity/i) {
 }
 
 unless (basename($WORKDIR) =~ /trinity/i) {
-    die "Error, workdir must contain the word 'trinity' as a safety precaution, given that auto-deletion can take place.\n";
+    die "Error, workdir must contain the word 'trinity' as a safety precaution, given that auto-deletion can take place you gave $WORKDIR.\n";
 }
 
 
