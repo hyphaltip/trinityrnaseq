@@ -130,8 +130,9 @@ my $bflyCalculateCPU = 0;
 my $bflyGCThreads = 2;
 my $bflyGCType = "serial";  # serial|parallel|g1 - serial avoids G1's region-setup cost on the mostly-tiny per-component heaps butterfly launches thousands of times
 my $bflyTieredStopAtLevel = 1;  # cap JIT to C1-only (0=off,1=C1 only); short-lived butterfly JVMs rarely run long enough to recoup C2 warm-up cost
-my $NO_BFLY_CDS = 0;        # set to disable Class Data Sharing archive creation/use for butterfly launches
-my $bfly_cds_archive;       # path to CDS archive; auto-generated in the output dir if CDS is enabled and not explicitly provided
+my $NO_BFLY_CDS = 0;        # set to disable Class Data Sharing archive use for butterfly launches
+my $bfly_cds_archive;       # path to a static CDS archive (.jsa); defaults to the one shipped
+                             # alongside Butterfly.jar (see $BUTTERFLY_DIR) if present
 
 my $long_reads = "";
 my $LONG_READS_MODE = 0;
@@ -455,12 +456,14 @@ my $full_usage = qq^
 #                                   only, 1=C1 only, 4=full tiered/default JVM behavior)
 #                                   (default: $bflyTieredStopAtLevel); short-lived butterfly
 #                                   JVMs rarely run long enough to recoup C2 warm-up cost.
-#  --no_bfly_cds                   :disable Class Data Sharing (CDS) archive creation/use
+#  --no_bfly_cds                   :disable Class Data Sharing (CDS) archive use
 #                                   for butterfly launches (see --bfly_cds_archive)
-#  --bfly_cds_archive <string>     :path to a CDS archive (.jsa) for butterfly launches.
-#                                   If CDS is enabled (default) and no archive is given,
-#                                   one is auto-generated in the output directory from the
-#                                   first butterfly component, then reused for the rest -
+#  --bfly_cds_archive <string>     :path to a static CDS archive (.jsa) for butterfly
+#                                   launches. If CDS is enabled (default) and no archive
+#                                   is given, the static archive shipped alongside
+#                                   Butterfly.jar is used if present (built at package
+#                                   build time by
+#                                   util/support_scripts/build_butterfly_cds_archive.sh) -
 #                                   this amortizes JVM class-loading/verification cost
 #                                   across the thousands of per-component butterfly launches.
 #  --bflyCPU <int>                 :CPUs to use (default will be normal
@@ -1148,6 +1151,20 @@ unless ($BFLY_JAR) {
     $BFLY_JAR = "$BUTTERFLY_DIR/Butterfly.jar";
 }
 
+# Default to the static CDS archive shipped alongside Butterfly.jar (built by
+# util/support_scripts/build_butterfly_cds_archive.sh at package build time).
+# This is a single, fixed, install-level path - identical for every process,
+# parent or --trinity_complete child alike - so unlike the old per-run
+# archive it needs no special-casing or forwarding logic to keep runs and
+# their children in agreement; --bfly_cds_archive can still override it, and
+# --no_bfly_cds still disables CDS entirely.
+unless ($NO_BFLY_CDS || $bfly_cds_archive) {
+    my $default_bfly_cds_archive = "$BUTTERFLY_DIR/butterfly_cds.jsa";
+    if (-s $default_bfly_cds_archive) {
+        $bfly_cds_archive = $default_bfly_cds_archive;
+    }
+}
+
 
 unless ($NO_NORMALIZE_READS_FLAG) {
     $NORMALIZE_READS_FLAG = 1;
@@ -1480,16 +1497,6 @@ main: {
 
     print STDERR "-changing dir to output dir: $output_directory\n" if $VERBOSE;
     chdir ($output_directory) or die "Error, cannot cd to $output_directory";
-
-    # Establish one butterfly CDS archive path for the whole run (top-level invocations
-    # only - a --trinity_complete child inherits its parent's setting explicitly, see
-    # write_trinity_partitioned_cmds()). This lets every butterfly launch across the run,
-    # including ones split across many per-partition child Trinity processes in
-    # genome-guided mode, share and reuse the same archive rather than each child training
-    # its own for no benefit. See maybe_setup_bfly_cds().
-    unless ($NO_BFLY_CDS || $TRINITY_COMPLETE_FLAG || $bfly_cds_archive) {
-        $bfly_cds_archive = "$output_directory/butterfly_cds.jsa";
-    }
 
     collectl_start() unless ($TRINITY_COMPLETE_FLAG || $FULL_CLEANUP);
     &perfmon_start() unless ($TRINITY_COMPLETE_FLAG || $FULL_CLEANUP);
@@ -2032,7 +2039,7 @@ sub run_Trinity {
             . "---------------------------------------------------------------\n\n" if $VERBOSE;
         
                 
-        &maybe_setup_bfly_cds($butterfly_cmds);
+        &maybe_apply_bfly_cds($butterfly_cmds);
 
         my $pipeliner = new Pipeliner(-verbose => ($TRINITY_COMPLETE_FLAG) ? $VERBOSE : max(1, $VERBOSE));
         my $cmd = "$PARAFLY -c $butterfly_cmds -shuffle -CPU $bflyCPU -failed_cmds failed_butterfly_commands.$$.txt ";  # shuffle them since the first ones are usually the longest-running ones.
@@ -2557,104 +2564,60 @@ sub run_chrysalis {
 ####
 # Amortize butterfly's per-JVM class-loading/verification cost across the many
 # (often thousands, and in genome-guided mode, tens of thousands split across
-# per-partition child Trinity processes) butterfly launches by sharing one
+# per-partition child Trinity processes) butterfly launches by sharing a JDK
 # Class Data Sharing (CDS) archive across them.
 #
-# $bfly_cds_archive is a single path shared by the whole run: for a plain
-# (non genome-guided) run it's set once here at the top level; for
-# genome-guided runs it's set once at the top level and forwarded to every
-# per-partition child "Trinity --single ... --trinity_complete" invocation
-# via @ORIG_ARGS, so all partitions build/reuse the *same* archive instead of
-# each training its own (which, given most partitions only run one or two
-# butterfly commands, would provide no reuse benefit at all).
-#
-# The archive is generated lazily, from a real butterfly invocation (the
-# first command in this batch), the first time any process observes it
-# missing. Concurrent partitions racing to create it is harmless: each writes
-# to its own uniquely-named temp file and atomically renames it into place,
-# so the last writer simply wins and no reader ever sees a partial archive.
-# If archive creation fails (e.g. -XX:ArchiveClassesAtExit is unsupported on
-# an older JDK), a sentinel file is written so later partitions don't keep
-# retrying a doomed training run.
-sub maybe_setup_bfly_cds {
+# $bfly_cds_archive points at a *static* archive built once, at package build
+# time, by util/support_scripts/build_butterfly_cds_archive.sh (see
+# $BUTTERFLY_DIR/butterfly_cds.jsa, defaulted below near $BFLY_JAR). Being
+# static (java -Xshare:dump) rather than trained per-run (java
+# -XX:ArchiveClassesAtExit), there is no runtime training step, no race
+# between concurrent per-partition processes to be the trainer, and no
+# per-run archive file - just one pre-built, read-only archive that every
+# butterfly launch across every run references identically. This previously
+# used a lazily-trained-per-run dynamic archive, which in practice failed
+# CDS's classpath validation on nearly every reuse (see git history) -
+# switching to a static archive sidesteps that fragility entirely.
+sub maybe_apply_bfly_cds {
     my ($cmds_file) = @_;
 
-    return unless ($bfly_cds_archive && ! $NO_BFLY_CDS);
+    return unless ($bfly_cds_archive && ! $NO_BFLY_CDS && -s $bfly_cds_archive);
 
-    my $unsupported_marker = "$bfly_cds_archive.unsupported";
-    return if (-e $unsupported_marker);
+    open (my $fh, $cmds_file) or return;
+    my @lines = <$fh>;
+    close $fh;
 
-    unless (-s $bfly_cds_archive) {
-
-        open (my $fh, $cmds_file) or return;
-        my $first_cmd = <$fh>;
-        close $fh;
-        return unless $first_cmd;
-        chomp $first_cmd;
-
-        my $tmp_archive = "$bfly_cds_archive.tmp.$$";
-        # NOTE: -XX:ArchiveClassesAtExit (dynamic CDS) layers app classes on top of the
-        # JDK's default base archive, so it must run with base sharing enabled - it errors
-        # out ("unsupported when base CDS archive is not loaded") if combined with
-        # -Xshare:off. Leave default sharing (-Xshare:auto) in effect during training.
+    # write-to-temp-then-rename: a write/close failure partway through (e.g. an NFS
+    # error, which surfaces at close() rather than at print()) must not leave
+    # $cmds_file truncated - PARAFLY is about to consume it. On any failure, bail out
+    # and leave the original (CDS-flag-free) $cmds_file exactly as it was.
+    my $tmp_cmds_file = "$cmds_file.cds_tmp.$$";
+    open (my $ofh, ">$tmp_cmds_file") or return;
+    foreach my $orig_line (@lines) {
+        my $line = $orig_line;
+        chomp $line;
+        next unless $line;
         # NOTE: JVM flags only take effect if they appear before "-jar <jarfile>" on the
         # command line - anything after "-jar" is passed to Butterfly's own main() as a
-        # program argument instead of being read by the JVM. So this must be spliced in
-        # before "-jar", not appended to the end of $first_cmd.
-        my $train_cmd = $first_cmd;
-        unless ($train_cmd =~ s/ -jar / -XX:ArchiveClassesAtExit='$tmp_archive' -jar /) {
-            return;
-        }
-        $train_cmd .= " > /dev/null 2>&1";
-        my $ret = system($train_cmd);
-
-        if ($ret == 0 && -s $tmp_archive && rename($tmp_archive, $bfly_cds_archive)) {
-            print STDERR "-created butterfly CDS archive: $bfly_cds_archive\n" if $VERBOSE;
-        }
-        else {
-            unlink($tmp_archive) if (-e $tmp_archive);
-            open (my $ofh, ">$unsupported_marker") or return;
-            print $ofh "butterfly CDS archive creation failed or unsupported on this JVM. cmd was:\n$train_cmd\n";
+        # program argument instead of being read by the JVM.
+        unless ($line =~ s/ -jar / -Xshare:auto -XX:SharedArchiveFile='$bfly_cds_archive' -jar /) {
             close $ofh;
+            unlink $tmp_cmds_file;
             return;
         }
+        print $ofh "$line\n" or do {
+            close $ofh;
+            unlink $tmp_cmds_file;
+            return;
+        };
     }
-
-    if (-s $bfly_cds_archive) {
-        open (my $fh, $cmds_file) or return;
-        my @lines = <$fh>;
-        close $fh;
-
-        # write-to-temp-then-rename: a write/close failure partway through (e.g. an NFS
-        # error, which surfaces at close() rather than at print()) must not leave
-        # $cmds_file truncated - PARAFLY is about to consume it. On any failure, bail out
-        # and leave the original (CDS-flag-free) $cmds_file exactly as it was.
-        my $tmp_cmds_file = "$cmds_file.cds_tmp.$$";
-        open (my $ofh, ">$tmp_cmds_file") or return;
-        foreach my $orig_line (@lines) {
-            my $line = $orig_line;
-            chomp $line;
-            next unless $line;
-            # As above: these JVM flags must precede "-jar", not trail the command.
-            unless ($line =~ s/ -jar / -Xshare:auto -XX:SharedArchiveFile='$bfly_cds_archive' -jar /) {
-                close $ofh;
-                unlink $tmp_cmds_file;
-                return;
-            }
-            print $ofh "$line\n" or do {
-                close $ofh;
-                unlink $tmp_cmds_file;
-                return;
-            };
-        }
-        unless (close $ofh) {
-            unlink $tmp_cmds_file;
-            return;
-        }
-        unless (rename($tmp_cmds_file, $cmds_file)) {
-            unlink $tmp_cmds_file;
-            return;
-        }
+    unless (close $ofh) {
+        unlink $tmp_cmds_file;
+        return;
+    }
+    unless (rename($tmp_cmds_file, $cmds_file)) {
+        unlink $tmp_cmds_file;
+        return;
     }
 
     return;
@@ -3969,7 +3932,7 @@ sub write_trinity_partitioned_cmds {
     # flag names) against substring patterns like "genome"/"output", and a real output
     # path (e.g. one under a directory named ".../genome_annotation_training/...")
     # can innocently contain one of those substrings and get mis-parsed as an unrelated
-    # option. Explicit and unambiguous is safer here. See maybe_setup_bfly_cds().
+    # option. Explicit and unambiguous is safer here. See maybe_apply_bfly_cds().
     if ($bfly_cds_archive) {
         $cmd .= " --bfly_cds_archive $bfly_cds_archive ";
     }

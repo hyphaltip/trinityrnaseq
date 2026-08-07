@@ -17,7 +17,7 @@ else
 endif
 
 
-all: inchworm_target chrysalis_target trinity_essentials rust_bio_target
+all: inchworm_target chrysalis_target trinity_essentials rust_bio_target butterfly_cds_target
 	sh ./util/support_scripts/trinity_install_tests.sh
 
 
@@ -40,6 +40,11 @@ chrysalis_target:
 
 trinity_essentials:
 	cd trinity-plugins && $(MAKE) trinity_essentials
+
+# Static JDK CDS archive for Butterfly (see util/support_scripts/build_butterfly_cds_archive.sh).
+# Re-run whenever Butterfly.jar changes; cheap (~1s) so it's part of 'all'.
+butterfly_cds_target:
+	sh ./util/support_scripts/build_butterfly_cds_archive.sh
 
 
 plugins:
