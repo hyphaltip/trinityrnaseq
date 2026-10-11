@@ -1,8 +1,20 @@
 
 OS := $(shell uname)
 
+ifeq ($(OS),Darwin)
+# On macOS g++ and gcc are Apple clang, which has no -fopenmp (ParaFly needs it). Use the
+# compilers from the environment (for example conda's clang with llvm-openmp) when they are
+# set, or when CXX/CC are given on the make command line. Elsewhere the defaults are unchanged.
+ifeq ($(origin CXX),default)
+CXX = g++
+endif
+ifeq ($(origin CC),default)
+CC = gcc
+endif
+else
 CXX = g++
 CC = gcc
+endif
 COLLECTL_CODE="collectl-4.1.0"
 PARAFLY_CODE="ParaFly"
 TRIMMOMATIC_CODE=Trimmomatic-0.36
