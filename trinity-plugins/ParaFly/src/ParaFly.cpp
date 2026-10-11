@@ -7,6 +7,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <random>
 #include <signal.h>
 #include <sys/wait.h>
 
@@ -152,7 +153,11 @@ int main(int argc, char* argv[]) {
     int num_succeeded_commands = 0;
 
     if (shuffle_flag) {
-        random_shuffle(commandsArray.begin(), commandsArray.end());
+        // std::random_shuffle was removed in C++17 (libc++ in clang's default mode no longer has
+        // it). Fixed seed: the order is the same on every run for the same input, as it was with
+        // random_shuffle and its unseeded rand().
+        std::mt19937 rng(1);
+        std::shuffle(commandsArray.begin(), commandsArray.end(), rng);
     }
 
     omp_set_dynamic(0);
